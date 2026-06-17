@@ -1,0 +1,20 @@
+CREATE TABLE "paddle_refund_events" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "paddle_event_id" varchar(255),
+  "event_type" varchar(50) NOT NULL,
+  "event_name" varchar(100),
+  "status" varchar(50),
+  "first_name" varchar(255),
+  "last_name" varchar(255),
+  "email" varchar(255),
+  "amount" numeric,
+  "currency" varchar(20),
+  "transaction_id" varchar(255),
+  "reason" text,
+  "policy_number" varchar(255),
+  "payload" json,
+  "blacklisted_at" timestamp,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "updated_at" timestamp DEFAULT now() NOT NULL,
+  CONSTRAINT "paddle_refund_events_paddle_event_id_unique" UNIQUE("paddle_event_id")
+);

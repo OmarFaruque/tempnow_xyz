@@ -1,0 +1,2816 @@
+"use client"
+
+import { useState, useEffect, useCallback } from "react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  Search,
+  Edit,
+  Trash2,
+  Eye,
+  Download,
+  AlertTriangle,
+  Plus,
+  ArrowUpDown,
+  User,
+  Car,
+  CheckCircle,
+  RefreshCw,
+  Check
+} from "lucide-react"
+import { isValidUKRegistration } from "@/lib/utils"
+import { lookupVehicle } from "@/lib/vehicle-lookup"
+import { useToast } from "@/hooks/use-toast"
+
+
+interface VehicleData {
+  make: string;
+  model: string;
+  year: string;
+  engineSize: string;
+  fuelType: string;
+  colour: string;
+}
+
+interface PoliciesResponse {
+  data: any[]
+  total: number
+}
+
+
+const calculatePolicyStatus = (startDateTime: string, endDateTime: string) => {
+  const now = new Date();
+  const start = new Date(startDateTime);
+  const end = new Date(endDateTime);
+
+  if (now < start) {
+    return "Upcoming";
+  } else if (now >= start && now <= end) {
+    return "Active";
+  } else {
+    return "Expired";
+  }
+};
+
+const formatShortDate = (dateString: string) => {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear()).slice(-2);
+  return `${day}/${month}/${year}`;
+};
+
+const formatPaymentMethod = (method: string) => {
+  if (!method) return 'N/A';
+  switch (method) {
+    case 'bank_transfer':
+      return 'Bank';
+    case 'stripe':
+      return 'Stripe';
+    case 'mollie':
+      return 'Mollie';
+    case 'airwallex':
+      return 'Airwallex';
+    case 'square':
+      return 'Square';
+    default:
+      return method.charAt(0).toUpperCase() + method.slice(1);
+  }
+};
+
+
+
+const DEMO_REGISTRATIONS = [
+  "LX61 JYE - Volkswagen Golf 2017",
+  "FG34 HIJ - BMW 3 Series 2019",
+  "KL56 MNO - Audi A4 2020",
+  "CD78 EFG - Ford Focus 2018",
+  "MN90 PQR - Toyota Corolla 2021",
+  "ST12 UVW - Mercedes-Benz C-Class 2020",
+  "XY34 ZAB - Nissan Qashqai 2019",
+]
+
+const modificationsData = {
+  "Audio & Electronics": [
+    "Additional screens / headrest displays",
+    "Amplifiers",
+    "Dashcams (front/rear)",
+    "Subwoofers",
+    "Upgraded speakers",
+  ],
+  "Body & Exterior Styling": [
+    "Aftermarket grilles",
+    "Body kits (full)",
+    "Carbon fibre exterior parts",
+    "Custom badges / debadging",
+    "Dechroming",
+    "Diffusers",
+    "Paint changes",
+    "Side skirts",
+    "Smoked/tinted lights",
+    "Splitters",
+    "Spoilers / wings",
+    "Widebody kits",
+    "Wraps (full/partial)",
+  ],
+  "Comfort & Interior": [
+    "Bucket seats",
+    "Custom ambient lighting",
+    "Roll cages",
+    "Starlight headliner",
+    "Steering wheel upgrades",
+    "Upgraded infotainment systems",
+    "Upholstery changes (leather/alcantara, re-trim)",
+  ],
+  "Drivetrain & Engine Performance": [
+    "ECU remap / tuning (Stage 1/2/3)",
+    "Fuel system upgrades (injectors, HPFP)",
+    "Induction kits / performance intakes",
+    "Intercooler upgrades",
+    "Lightweight pulleys",
+    "Nitrous systems",
+    "Turbo upgrades / hybrid turbos",
+  ],
+  "Exhaust System": ["Cat-back systems", "Decat downpipes", "Exhaust tips", "Resonator delete", "Sports cat downpipes"],
+  Lighting: [
+    "DRL conversions (RGB, sequential)",
+    "Fog light upgrades",
+    "Headlight upgrades (LED/HID)",
+    "Interior LED conversions",
+    "Underglow lighting",
+  ],
+  "Safety & Security": ["Anti-hijack systems", "Ghost immobiliser", "Steering wheel locks/mounts", "Tracking systems (S5/S7)", "Upgraded alarm systems"],
+  "Suspension, Handling & Brakes": ["Air suspension", "Anti-roll bars", "Big brake kits", "Brake discs/pads (upgraded)", "Coilovers", "Lowering springs", "Strut braces", "Wheel spacers"],
+  "Transmission & Structural": ["Clutch upgrades", "Differential upgrades", "Driveshaft upgrades", "Tow bars", "Transmission tuning (TCU/gearbox map)"],
+  "Wheels & Tyres": ["Alloy wheels (aftermarket)", "Changing wheel size", "Tyre changes (performance, wider, stretch)", "Run-flat to non–run-flat conversion"],
+  Other: ["Roof racks", "Window tints", "Custom 3D/4D plates"],
+}
+
+const PAGE_SIZE = 25
+
+const PaginationControls = ({
+  page,
+  totalPages,
+  totalItems,
+  onPageChange,
+}: {
+  page: number
+  totalPages: number
+  totalItems: number
+  onPageChange: (page: number) => void
+}) => {
+  if (totalItems <= PAGE_SIZE) {
+    return null
+  }
+
+  const startItem = totalItems === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+  const endItem = totalItems === 0 ? 0 : Math.min(page * PAGE_SIZE, totalItems)
+  const rangeLabel = totalItems === 0 ? "0" : `${startItem}-${endItem}`
+
+  return (
+    <div className="flex flex-col gap-2 p-4 border-t sm:flex-row sm:items-center sm:justify-between">
+      <span className="text-sm text-muted-foreground">Showing {rangeLabel} of {totalItems} policies</span>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+        >
+          Previous
+        </Button>
+        <span className="text-sm">
+          Page {page} of {totalPages}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+export function PoliciesSection() {
+  const { toast } = useToast();
+  const hours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'));
+  const minutes = Array.from({ length: 60 }, (_, i) => i.toString().padStart(2, '0'));
+
+
+  const [searchTerm, setSearchTerm] = useState("")
+  const [sortBy, setSortBy] = useState("latest")
+  const [selectedPolicy, setSelectedPolicy] = useState<any | null>(null)
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [notifyOnDelete, setNotifyOnDelete] = useState(false)
+  const [deleteReason, setDeleteReason] = useState("")
+  const [isDeletingPolicy, setIsDeletingPolicy] = useState(false)
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [isCustomerDialogOpen, setIsCustomerDialogOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState("policies")
+  const [generatingInvoice, setGeneratingInvoice] = useState<number | null>(null);
+  const [paidPage, setPaidPage] = useState(1)
+  const [unconfirmedPage, setUnconfirmedPage] = useState(1)
+
+  // Add these state variables after the existing state declarations:
+  const [customerSearch, setCustomerSearch] = useState("")
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
+  const [filteredCustomers, setFilteredCustomers] = useState<any[]>([])
+  const [selectedCustomerForPolicy, setSelectedCustomerForPolicy] = useState<any | null>(null)
+  const [customerDetailsLocked, setCustomerDetailsLocked] = useState(false)
+
+  // Add occupation states
+  const [occupationSearch, setOccupationSearch] = useState("")
+  const [showOccupationDropdown, setShowOccupationDropdown] = useState(false)
+  const [filteredOccupations, setFilteredOccupations] = useState<string[]>([])
+
+  // Vehicle lookup states
+  const [vehicleLookupLoading, setVehicleLookupLoading] = useState(false)
+  const [vehicleLookupError, setVehicleLookupError] = useState("")
+  const [foundVehicle, setFoundVehicle] = useState<VehicleData | null>(null)
+  const [editVehicleLookupLoading, setEditVehicleLookupLoading] = useState(false)
+  const [editVehicleLookupError, setEditVehicleLookupError] = useState("")
+  const [editFoundVehicle, setEditFoundVehicle] = useState<VehicleData | null>(null)
+
+  // Edit policy states
+  const [editPolicy, setEditPolicy] = useState<any | null>(null)
+  // State for modifications in edit dialog
+  const [editCustomModifications, setEditCustomModifications] = useState<Record<string, string>>({})
+  const [editShowOtherInput, setEditShowOtherInput] = useState<Record<string, boolean>>({})
+
+
+  const [newPolicy, setNewPolicy] = useState<any>({
+    customerId: "",
+    firstName: "",
+    middleName: "",
+    lastName: "",
+    email: "",
+    phoneNumber: "",
+    dateOfBirth: "",
+    address: "",
+    postcode: "",
+    occupation: "",
+    vehicleReg: "",
+    vehicleMake: "",
+    vehicleModel: "",
+    vehicleYear: "",
+    vehicleValue: "",
+    amount: "",
+    startDate: "",
+    endDate: "",
+    startTime: "",
+    endTime: "",
+    reason: "",
+    licenseType: "",
+    licenseHeld: "",
+  })
+
+  // Add address lookup states for new policy form:
+  const [addresses, setAddresses] = useState<string[]>([])
+  const [showAddresses, setShowAddresses] = useState(false)
+  const [postcodeError, setPostcodeError] = useState("")
+
+  // Add address lookup states for edit form:
+  const [editAddresses, setEditAddresses] = useState<string[]>([])
+  const [showEditAddresses, setShowEditAddresses] = useState(false)
+  const [editPostcodeError, setEditPostcodeError] = useState("")
+  const [approvingPolicyId, setApprovingPolicyId] = useState<number | null>(null);
+  const [isFraudDialogOpen, setIsFraudDialogOpen] = useState(false);
+  const [selectedFraudPolicy, setSelectedFraudPolicy] = useState<any | null>(null);
+  const [fraudApprovalNote, setFraudApprovalNote] = useState("");
+
+  const [customers, setCustomers] = useState<any[]>([])
+
+  const [paidPolicies, setPaidPolicies] = useState<any[]>([])
+  const [paidTotal, setPaidTotal] = useState(0)
+  const [paidLoading, setPaidLoading] = useState(false)
+  const [paidError, setPaidError] = useState<string | null>(null)
+  const [hasLoadedPaid, setHasLoadedPaid] = useState(false)
+
+  const [unconfirmedPolicies, setUnconfirmedPolicies] = useState<any[]>([])
+  const [unconfirmedTotal, setUnconfirmedTotal] = useState(0)
+  const [unconfirmedLoading, setUnconfirmedLoading] = useState(false)
+  const [unconfirmedError, setUnconfirmedError] = useState<string | null>(null)
+  const [hasLoadedUnconfirmed, setHasLoadedUnconfirmed] = useState(false)
+
+  const fetchPolicies = useCallback(
+    async (status: "confirmed" | "pending", page: number): Promise<PoliciesResponse> => {
+      const params = new URLSearchParams({
+        status,
+        page: page.toString(),
+        pageSize: PAGE_SIZE.toString(),
+        sort: sortBy,
+      })
+
+      if (searchTerm.trim()) {
+        params.append("search", searchTerm.trim())
+      }
+
+      const response = await fetch(`/api/admin/policies?${params.toString()}`)
+      if (!response.ok) {
+        throw new Error("Failed to fetch policies")
+      }
+      const result: PoliciesResponse = await response.json()
+      return result
+    },
+    [searchTerm, sortBy],
+  )
+
+  const loadPaidPolicies = useCallback(
+    async (pageOverride?: number) => {
+      const targetPage = pageOverride ?? paidPage
+      setPaidLoading(true)
+      try {
+        const result = await fetchPolicies("confirmed", targetPage)
+        const policiesData = Array.isArray(result.data) ? result.data : []
+        setPaidPolicies(policiesData)
+        setPaidTotal(result.total ?? 0)
+        setPaidError(null)
+      } catch (err) {
+        console.error(err)
+        setPaidError("Failed to fetch policies")
+      } finally {
+        setPaidLoading(false)
+        setHasLoadedPaid(true)
+      }
+    },
+    [fetchPolicies, paidPage],
+  )
+
+  const loadUnconfirmedPolicies = useCallback(
+    async (pageOverride?: number) => {
+      const targetPage = pageOverride ?? unconfirmedPage
+      setUnconfirmedLoading(true)
+      try {
+        const result = await fetchPolicies("pending", targetPage)
+        const policiesData = Array.isArray(result.data) ? result.data : []
+        setUnconfirmedPolicies(policiesData)
+        setUnconfirmedTotal(result.total ?? 0)
+        setUnconfirmedError(null)
+      } catch (err) {
+        console.error(err)
+        setUnconfirmedError("Failed to fetch policies")
+      } finally {
+        setUnconfirmedLoading(false)
+        setHasLoadedUnconfirmed(true)
+      }
+    },
+    [fetchPolicies, unconfirmedPage],
+  )
+
+  useEffect(() => {
+    loadPaidPolicies()
+  }, [loadPaidPolicies])
+
+  useEffect(() => {
+    loadUnconfirmedPolicies()
+  }, [loadUnconfirmedPolicies])
+
+  const paidTotalPages = Math.max(1, Math.ceil(paidTotal / PAGE_SIZE))
+  const unconfirmedTotalPages = Math.max(1, Math.ceil(unconfirmedTotal / PAGE_SIZE))
+
+  const handleSearchChange = (value: string) => {
+    setSearchTerm(value)
+    setPaidPage(1)
+    setUnconfirmedPage(1)
+  }
+
+  const handleSortChange = (value: string) => {
+    setSortBy(value)
+    setPaidPage(1)
+    setUnconfirmedPage(1)
+  }
+
+  useEffect(() => {
+    if (paidPage > paidTotalPages) {
+      setPaidPage(paidTotalPages)
+    }
+  }, [paidPage, paidTotalPages])
+
+  useEffect(() => {
+    if (unconfirmedPage > unconfirmedTotalPages) {
+      setUnconfirmedPage(unconfirmedTotalPages)
+    }
+  }, [unconfirmedPage, unconfirmedTotalPages])
+
+  const getStatusBadge = (policy: any) => {
+    if (!policy || !policy.startDate || !policy.endDate) {
+      return <Badge variant="secondary">Unknown</Badge>
+    }
+
+    const status = calculatePolicyStatus(policy.startDate, policy.endDate)
+
+    switch (status) {
+      case "Upcoming":
+        return <Badge className="bg-blue-100 text-blue-800">Upcoming</Badge>
+      case "Active":
+        return <Badge className="bg-green-100 text-green-800">Active</Badge>
+      case "Expired":
+        return <Badge className="bg-red-100 text-red-800">Expired</Badge>
+      default:
+        return <Badge variant="secondary">{status}</Badge>
+    }
+  }
+
+  const formatDateTime = (date: string, time: string) => {
+    return `${date} ${time}`
+  }
+
+  const handleViewPolicy = (policy: any) => {
+    // Open policy view page in new tab
+    window.open(`/policy/view?number=${policy.policyNumber}`, "_blank")
+  }
+
+  // const handleViewCustomer = (policy: any) => {
+  //   const customer = customers.find(
+  //     (c) =>
+  //       c.firstName === policy.firstName &&
+  //       c.lastName === policy.lastName &&
+  //       c.dateOfBirth === policy.dateOfBirth,
+  //   )
+  //   if (customer) {
+  //     setSelectedCustomer(customer)
+  //     setIsCustomerDialogOpen(true)
+  //   }
+  // }
+
+  // Add these functions after handleEditVehicleLookup:
+
+  const handleCustomerSearch = (searchTerm: string) => {
+    setCustomerSearch(searchTerm)
+
+    if (searchTerm.trim() === "") {
+      setFilteredCustomers([])
+      setShowCustomerDropdown(false)
+      return
+    }
+
+    const filtered = customers.filter(
+      (customer) =>
+        customer.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        customer.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        customer.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        `${customer.firstName} ${customer.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()),
+    )
+
+    setFilteredCustomers(filtered.slice(0, 10)) // Limit to 10 results
+    setShowCustomerDropdown(true)
+  }
+
+  const selectCustomerForPolicy = (customer: any) => {
+    setSelectedCustomerForPolicy(customer)
+    setCustomerSearch(`${customer.firstName} ${customer.lastName} (${customer.email})`)
+    setShowCustomerDropdown(false)
+    setCustomerDetailsLocked(false) // Allow editing by default
+
+    // Auto-populate customer fields
+    setNewPolicy({
+      ...newPolicy,
+      customerId: customer.id,
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+      email: customer.email,
+      phoneNumber: customer.phone,
+      dateOfBirth: customer.dateOfBirth,
+      address: customer.address,
+      postcode: customer.postcode,
+      occupation: customer.occupation,
+      licenseType: customer.licenseType,
+      licenseHeld: customer.licenseHeld,
+    })
+  }
+
+  const handleOccupationSearch = (searchTerm: string) => {
+    setOccupationSearch(searchTerm)
+
+    if (searchTerm.trim() === "") {
+      setFilteredOccupations([])
+      setShowOccupationDropdown(false)
+      return
+    }
+
+    // You'll need to import occupations from the quote page
+    const occupationsList = [
+      "Accountant",
+      "Actor",
+      "Architect",
+      "Artist",
+      "Baker",
+      "Barber",
+      "Carpenter",
+      "Chef",
+      "Dentist",
+      "Designer",
+      "Doctor",
+      "Driver",
+      "Electrician",
+      "Engineer",
+      "Farmer",
+      "Firefighter",
+      "Journalist",
+      "Lawyer",
+      "Manager",
+      "Mechanic",
+      "Nurse",
+      "Pharmacist",
+      "Photographer",
+      "Pilot",
+      "Plumber",
+      "Police Officer",
+      "Professor",
+      "Programmer",
+      "Receptionist",
+      "Retired",
+      "Sales Representative",
+      "Scientist",
+      "Self Employed",
+      "Student",
+      "Teacher",
+      "Veterinarian",
+      "Waiter/Waitress",
+      "Writer",
+    ]
+
+    const filtered = occupationsList.filter((occupation) => occupation.toLowerCase().includes(searchTerm.toLowerCase()))
+
+    setFilteredOccupations(filtered.slice(0, 10))
+    setShowOccupationDropdown(true)
+  }
+
+  const selectOccupation = (occupation: string) => {
+    setNewPolicy({ ...newPolicy, occupation })
+    setOccupationSearch(occupation)
+    setShowOccupationDropdown(false)
+  }
+
+  // Vehicle lookup for new policy
+  const handleVehicleLookup = async () => {
+    if (!newPolicy.vehicleReg.trim()) {
+      setVehicleLookupError("Please enter a vehicle registration")
+      return
+    }
+
+    if (!isValidUKRegistration(newPolicy.vehicleReg)) {
+      setVehicleLookupError("Please enter a valid UK registration format")
+      return
+    }
+
+    setVehicleLookupLoading(true)
+    setVehicleLookupError("")
+    setFoundVehicle(null)
+
+    try {
+      const result = await lookupVehicle(newPolicy.vehicleReg)
+
+      if (result.success && result.vehicle) {
+        setFoundVehicle(result.vehicle)
+        setNewPolicy({
+          ...newPolicy,
+          vehicleMake: result.vehicle.make,
+          vehicleModel: result.vehicle.model,
+          vehicleYear: result.vehicle.year,
+        })
+      } else {
+        setVehicleLookupError(result.error || "Vehicle not found")
+      }
+    } catch (error) {
+      setVehicleLookupError("Failed to lookup vehicle. Please try again.")
+    } finally {
+      setVehicleLookupLoading(false)
+    }
+  }
+
+  // Vehicle lookup for edit policy
+  const handleEditVehicleLookup = async (registration: string) => {
+    if (!registration.trim()) {
+      setEditVehicleLookupError("Please enter a vehicle registration")
+      return
+    }
+
+    if (!isValidUKRegistration(registration)) {
+      setEditVehicleLookupError("Please enter a valid UK registration format")
+      return
+    }
+
+    setEditVehicleLookupLoading(true)
+    setEditVehicleLookupError("")
+    setEditFoundVehicle(null)
+
+    try {
+      const result = await lookupVehicle(registration)
+
+      if (result.success && result.vehicle && editPolicy) {
+        setEditFoundVehicle(result.vehicle)
+        setEditPolicy({
+          ...editPolicy,
+          vehicleMake: result.vehicle.make,
+          vehicleModel: result.vehicle.model,
+          vehicleYear: result.vehicle.year,
+        })
+      } else {
+        setEditVehicleLookupError(result.error || "Vehicle not found")
+      }
+    } catch (error) {
+      setEditVehicleLookupError("Failed to lookup vehicle. Please try again.")
+    } finally {
+      setEditVehicleLookupLoading(false)
+    }
+  }
+
+  const resetNewPolicyForm = () => {
+    setNewPolicy({
+      customerId: "",
+      firstName: "",
+      middleName: "",
+      lastName: "",
+      email: "",
+      phoneNumber: "",
+      dateOfBirth: "",
+      address: "",
+      postcode: "",
+      occupation: "",
+      vehicleReg: "",
+      vehicleMake: "",
+      vehicleModel: "",
+      vehicleYear: "",
+      vehicleValue: "",
+      amount: "",
+      startDate: "",
+      endDate: "",
+      startTime: "",
+      endTime: "",
+      reason: "",
+      licenseType: "",
+      licenseHeld: "",
+    })
+    setFoundVehicle(null)
+    setVehicleLookupError("")
+    setSelectedCustomerForPolicy(null)
+    setCustomerSearch("")
+    setShowCustomerDropdown(false)
+    setOccupationSearch("")
+    setShowOccupationDropdown(false)
+    setCustomerDetailsLocked(false)
+    setAddresses([])
+    setShowAddresses(false)
+    setPostcodeError("")
+  }
+
+  const handleCreatePolicy = async () => {
+    try {
+      const response = await fetch("/api/admin/policies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newPolicy),
+      });
+      await response.json();
+      await Promise.all([loadPaidPolicies(), loadUnconfirmedPolicies()])
+      setIsCreateDialogOpen(false);
+    } catch (error) {
+      console.error("Failed to create policy:", error);
+    }
+  };
+
+  const handleOpenEditDialog = async (policy: any) => {
+    if (policy.user) {
+      try {
+        const response = await fetch(`/api/admin/users/${policy.user.userId}/policies`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch user policies');
+        }
+        const userPolicies = await response.json();
+
+        function parseDateTime(dt: string | null | undefined): { date: string; time: string } {
+          if (!dt || typeof dt !== 'string') return { date: '', time: '' };
+          const [date, time] = dt.split(' ');
+          return { date: date || '', time: time ? time.substring(0, 5) : '' };
+        }
+
+        setSelectedPolicy(policy);
+        setSelectedCustomer({ ...policy.user, quotes: userPolicies });
+        setEditFoundVehicle(null);
+        setEditVehicleLookupError("");
+        const parsedQuoteData = policy.quoteData ? JSON.parse(policy.quoteData) : {};
+        const vehicleValueFromQuoteData = parsedQuoteData.customerData?.vehicleValue || '';
+
+        const initialModifications = policy.vehicleModifications || [];
+        const initialCustomMods: Record<string, string> = {};
+        const initialShowOther: Record<string, boolean> = {};
+
+        initialModifications.forEach((mod: string) => {
+          if (mod.includes(" - Other: ")) {
+            const parts = mod.split(" - Other: ");
+            const category = parts[0];
+            const value = parts[1];
+            if (category && value) {
+              initialCustomMods[category] = value;
+              initialShowOther[category] = true;
+            }
+          }
+        });
+        setEditCustomModifications(initialCustomMods);
+        setEditShowOtherInput(initialShowOther);
+        setEditPolicy({
+          id: policy.id,
+          policyNumber: policy.policyNumber,
+          nameTitle: policy.nameTitle || '',
+          firstName: policy.firstName || '',
+          middleName: policy.middleName || '',
+          lastName: policy.lastName || '',
+          email: policy.user?.email || '',
+          phone: policy.phone || '',
+          dateOfBirth: parseDateTime(policy.dateOfBirth).date,
+          postCode: policy.postCode || '',
+          address: policy.address || '',
+          occupation: policy.occupation || '',
+          regNumber: policy.regNumber || '',
+          vehicleMake: policy.vehicleMake || '',
+          vehicleModel: policy.vehicleModel || '',
+          vehicleYear: policy.vehicleYear || '',
+          vehicleValue: vehicleValueFromQuoteData,
+          reason: policy.coverReason || '',
+          licenseType: policy.licenceType || '',
+          licenseHeld: policy.licencePeriod || '',
+          startDate: parseDateTime(policy.startDate).date,
+          startTime: parseDateTime(policy.startDate).time,
+          endDate: parseDateTime(policy.endDate).date,
+          premium: parseFloat(policy.updatePrice) || parseFloat(policy.cpw) || 0,
+          endTime: parseDateTime(policy.endDate).time,
+          modifications: policy.vehicleModifications || [],
+        });
+        setIsEditDialogOpen(true);
+      } catch (error) {
+        console.error(error);
+        alert("Failed to fetch user policies.");
+      }
+    } else {
+      alert("This policy is not associated with a user.");
+    }
+  };
+
+  const handleEditModificationToggle = (modification: string) => {
+    setEditPolicy((prev: any) => {
+      const isSelected = prev.modifications.includes(modification)
+      if (isSelected) {
+        return {
+          ...prev,
+          modifications: prev.modifications.filter((m: string) => m !== modification),
+        }
+      } else {
+        return {
+          ...prev,
+          modifications: [...prev.modifications, modification],
+        }
+      }
+    })
+  }
+
+  const handleEditOtherToggle = (category: string) => {
+    setEditShowOtherInput((prev) => ({
+      ...prev,
+      [category]: !prev[category],
+    }))
+
+    if (editShowOtherInput[category]) {
+      const customModKey = `${category} - Other: ${editCustomModifications[category]}`
+      setEditPolicy((prev: any) => ({
+        ...prev,
+        modifications: prev.modifications.filter((m: string) => m !== customModKey),
+      }))
+      setEditCustomModifications((prev) => ({ ...prev, [category]: "" }))
+    }
+  }
+
+  const handleEditCustomModificationChange = (category: string, value: string) => {
+    const oldCustomValue = editCustomModifications[category] || "";
+
+    setEditCustomModifications((prev) => ({
+      ...prev,
+      [category]: value,
+    }));
+    
+    setEditPolicy((prev: any) => {
+      const oldCustomModKey = `${category} - Other: ${oldCustomValue}`;
+      const filteredMods = prev.modifications.filter((m: string) => m !== oldCustomModKey);
+      
+      const newCustomModKey = `${category} - Other: ${value}`;
+      const newMods = value.trim() ? [...filteredMods, newCustomModKey] : filteredMods;
+      return { ...prev, modifications: newMods };
+    });
+  };
+
+  const handleUpdatePolicy = async () => {
+    if (!editPolicy) return;
+
+    // Map the form state back to the database schema format
+    // Retrieve and parse existing quoteData
+    const existingQuoteData = selectedPolicy?.quoteData ? JSON.parse(selectedPolicy.quoteData) : {};
+    // Update vehicleValue within customerData
+    const updatedCustomerData = {
+      ...existingQuoteData.customerData,
+      vehicleValue: editPolicy.vehicleValue,
+    };
+    const updatedQuoteData = {
+      ...existingQuoteData,
+      customerData: updatedCustomerData,
+    };
+
+    const policyDataForDb = {
+      nameTitle: editPolicy.nameTitle,
+      firstName: editPolicy.firstName,
+      lastName: editPolicy.lastName,
+      middleName: editPolicy.middleName,
+      phone: editPolicy.phone,
+      dateOfBirth: `${editPolicy.dateOfBirth} 00:00:00`,
+      postCode: editPolicy.postCode,
+      address: editPolicy.address,
+      occupation: editPolicy.occupation,
+      regNumber: editPolicy.regNumber,
+      vehicleMake: editPolicy.vehicleMake,
+      vehicleModel: editPolicy.vehicleModel,
+      coverReason: editPolicy.reason,
+      licenceType: editPolicy.licenseType,
+      licencePeriod: editPolicy.licenseHeld,
+      startDate: `${editPolicy.startDate} ${editPolicy.startTime || '00:00'}:00`,
+      endDate: `${editPolicy.endDate} ${editPolicy.endTime || '00:00'}:00`,
+      cpw: String(editPolicy.premium),
+      quoteData: JSON.stringify(updatedQuoteData),
+      vehicleModifications: editPolicy.modifications,
+    };
+
+    try {
+      const response = await fetch("/api/admin/policies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policyId: editPolicy.id, policyData: policyDataForDb }),
+      });
+      await response.json();
+      await Promise.all([loadPaidPolicies(), loadUnconfirmedPolicies()])
+      setIsEditDialogOpen(false);
+    } catch (error) {
+      console.error("Failed to update policy:", error);
+    }
+  };
+
+  const handleDeletePolicy = async () => {
+    if (!selectedPolicy) return;
+
+    if (notifyOnDelete && !deleteReason.trim()) {
+      toast({
+        variant: "destructive",
+        title: "Reason required",
+        description: "Please enter a cancellation reason before notifying the user.",
+      })
+      return
+    }
+
+    
+    try {
+      setIsDeletingPolicy(true)
+      const response  = await fetch("/api/admin/policies", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          policyId: selectedPolicy.id,
+          notifyUser: notifyOnDelete,
+          reason: deleteReason.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete order")
+      }
+      await Promise.all([loadPaidPolicies(), loadUnconfirmedPolicies()])
+      setIsDeleteDialogOpen(false)
+      setNotifyOnDelete(false)
+      setDeleteReason("")
+
+      toast({
+        title: "Order deleted",
+        description: notifyOnDelete
+          ? "Order deleted and cancellation email sent to the user."
+          : "Order deleted successfully.",
+      })
+
+    } catch (error) {
+      console.error("Failed to delete policy:", error);
+      toast({
+        variant: "destructive",
+        title: "Delete failed",
+        description: "Could not delete the order. Please try again.",
+      })
+    } finally {
+        setIsDeletingPolicy(false)
+    }
+  };
+
+
+  const handlePostcodeLookup = async () => {
+    
+    // Reset any previous errors
+    setPostcodeError("");
+
+    // Check if postcode is empty
+    if (!editPolicy.postCode.trim()) {
+      setPostcodeError("Please enter a postcode before searching");
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/postcode-lookup?postcode=${encodeURIComponent(editPolicy.postCode)}`);
+
+      if (response.ok) {
+        const data = await response.json();
+
+        console.log('Postcode lookup data: ', data);
+
+        if (data.addresses && data.addresses.length > 0) {
+          setEditAddresses(data.addresses);
+          setShowEditAddresses(true);
+        } else {
+          setPostcodeError("No addresses found for this postcode.");
+          setEditAddresses([]);
+          setShowEditAddresses(false);
+        }
+      } else {
+        setPostcodeError("Failed to fetch addresses. Please try again.");
+        setShowEditAddresses(false);
+      }
+    } catch (error) {
+      console.error("An error occurred during postcode lookup", error);
+      setPostcodeError("An unexpected error occurred. Please try again.");
+      setShowEditAddresses(false);
+    }
+  }
+
+  const handleApprovePolicy = async (policyId: number) => {
+    setApprovingPolicyId(policyId);
+    try {
+        const response = await fetch('/api/admin/policies/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ policyId }),
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to approve policy');
+        }
+
+        await Promise.all([loadPaidPolicies(), loadUnconfirmedPolicies()])
+
+    } catch (error) {
+        console.error('Error approving policy:', error);
+    } finally {
+        setApprovingPolicyId(null);
+    }
+  };
+
+  const handleOpenFraudDialog = (policy: any) => {
+    setSelectedFraudPolicy(policy);
+    setIsFraudDialogOpen(true);
+  };
+
+  const handleApproveFraud = async (policyId: number, note?: string) => {
+    setApprovingPolicyId(policyId);
+    try {
+      const res = await fetch('/api/admin/policies/approve-fraud', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policyId, note }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to approve fraud');
+      }
+
+      await Promise.all([loadPaidPolicies(), loadUnconfirmedPolicies()]);
+      setIsFraudDialogOpen(false);
+      setSelectedFraudPolicy(null);
+    } catch (err) {
+      console.error('Error approving fraud:', err);
+      toast({ variant: 'destructive', title: 'Error', description: 'Failed to approve fraud' });
+    } finally {
+      setApprovingPolicyId(null);
+    }
+  };
+
+  const handleRetryFraud = async (policyId: number) => {
+    setApprovingPolicyId(policyId);
+    try {
+      const res = await fetch('/api/admin/policies/retry-fraud', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policyId }),
+      });
+
+      if (!res.ok) throw new Error('Failed to retry fraud check');
+
+      await Promise.all([loadPaidPolicies(), loadUnconfirmedPolicies()]);
+      const data = await res.json();
+      // refresh dialog with updated policy if open
+      if (isFraudDialogOpen) {
+        const updated = paidPolicies.find(p => p.id === policyId) || unconfirmedPolicies.find(p => p.id === policyId);
+        if (updated) setSelectedFraudPolicy(updated as any);
+      }
+      toast({ title: 'Retry Complete', description: 'Fraud check re-run and results saved.' });
+    } catch (err) {
+      console.error('Error retrying fraud check:', err);
+      toast({ variant: 'destructive', title: 'Error', description: 'Failed to retry fraud check' });
+    } finally {
+      setApprovingPolicyId(null);
+    }
+  };
+
+  const handleGenerateInvoice = async (policyNumber: string, policyId: number) => {
+    setGeneratingInvoice(policyId);
+    try {
+      const response = await fetch('/api/admin/policies/generate-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policyNumber }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate invoice');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${policyNumber}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+    } catch (error) { // @ts-ignore
+      toast({ variant: "destructive", title: "Error", description: error.message });
+    } finally {
+      setGeneratingInvoice(null);
+    }
+  };
+
+
+  const initialLoading = !hasLoadedPaid || !hasLoadedUnconfirmed
+
+  if (initialLoading) {
+    return <div>Loading...</div>
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Orders</CardTitle>
+        <CardDescription>Manage all document orders purchased through your platform</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="relative flex-1 w-full md:max-w-sm">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+              <Input
+                placeholder="Search orders..."
+                value={searchTerm}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            <Select value={sortBy} onValueChange={handleSortChange}>
+              <SelectTrigger className="w-full sm:w-48">
+                <ArrowUpDown className="h-4 w-4 mr-2" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="latest">Latest Purchased</SelectItem>
+                <SelectItem value="oldest">Oldest Purchased</SelectItem>
+                <SelectItem value="expiring-soon">Expiring Soon</SelectItem>
+                <SelectItem value="amount-high">Highest Amount</SelectItem>
+                <SelectItem value="amount-low">Lowest Amount</SelectItem>
+                <SelectItem value="alphabetical">Alphabetical</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline">
+              <Download className="h-4 w-4 mr-2" />
+              Export
+            </Button>
+            <Button onClick={() => setIsCreateDialogOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add New Order
+            </Button>
+          </div>
+        </div>
+
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="policies">Orders</TabsTrigger>
+            <TabsTrigger value="unconfirmed">Unconfirmed Orders</TabsTrigger>
+          </TabsList>
+          <TabsContent value="policies">
+            <div className="border rounded-lg">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Policy ID</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Vehicle</TableHead>
+                    <TableHead>Registration</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Payment</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {paidLoading && (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">
+                        Loading policies...
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!paidLoading && paidError && (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center text-sm text-red-600">
+                        {paidError}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!paidLoading && !paidError && paidPolicies.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">
+                        No policies found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!paidError &&
+                    paidPolicies.map((policy) => (
+                      <TableRow key={policy.id} className="relative">
+                        {approvingPolicyId === policy.id && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-75 backdrop-blur-sm z-10 rounded-md">
+                            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                          </div>
+                      )}
+                      <TableCell className="font-medium">{policy.policyNumber}</TableCell>
+                      <TableCell>
+                        <div>
+                          <div className="font-medium">
+                            {policy?.nameTitle} {policy.firstName} {policy.lastName}
+                          </div>
+                          <div className="text-sm text-gray-500">{policy.email}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {policy.vehicleMake} {policy.vehicleModel}
+                      </TableCell>
+                      <TableCell className="font-mono">{policy.regNumber}</TableCell>
+                      <TableCell>£{Number(policy.updatePrice || policy.cpw || 0).toFixed(2)}</TableCell>
+                      <TableCell>{formatPaymentMethod(policy.paymentMethod)}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {getStatusBadge(policy)}
+                          {policy?.fraudStatus && policy?.fraudStatus !== 'ok' && (
+                            <Badge className={policy.fraudStatus === 'blocked' || policy.fraudStatus === 'error' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}>
+                              {policy.fraudStatus === 'blocked' ? 'Fraud: Blocked' : policy.fraudStatus === 'error' ? 'Fraud: Error' : 'Fraud: Warning'}
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          <div>{formatShortDate(policy.startDate)}</div>
+                          <div className="text-gray-500">to {formatShortDate(policy.endDate)}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleOpenEditDialog(policy)}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedPolicy(policy)
+                              setIsDeleteDialogOpen(true)
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => handleViewPolicy(policy)}>
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleGenerateInvoice(policy.policyNumber, policy.id)}
+                                  disabled={generatingInvoice === policy.id}
+                                >
+                                  {generatingInvoice === policy.id ? (
+                                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <Download className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Generate Invoice</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                          {policy?.fraudStatus && policy?.fraudStatus !== 'ok' && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleOpenFraudDialog(policy)}
+                                  >
+                                    <AlertTriangle className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>View Fraud Details</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                          {/* <Button variant="outline" size="sm" onClick={() => handleViewCustomer(policy)}>
+                            <User className="h-4 w-4" />
+                          </Button> */}
+                          {policy.paymentMethod === 'bank_transfer' && policy.status !== 'completed' && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleApprovePolicy(policy.id)}
+                                    disabled={approvingPolicyId !== null}
+                                  >
+                                    {approvingPolicyId === policy.id ? (
+                                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                      <Check className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Approve</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {!paidError && (
+                <PaginationControls
+                  page={paidPage}
+                  totalPages={paidTotalPages}
+                  totalItems={paidTotal}
+                  onPageChange={setPaidPage}
+                />
+              )}
+            </div>
+          </TabsContent>
+          <TabsContent value="unconfirmed">
+            <div className="border rounded-lg">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Policy ID</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Vehicle</TableHead>
+                    <TableHead>Registration</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Payment</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {unconfirmedLoading && (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">
+                        Loading policies...
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!unconfirmedLoading && unconfirmedError && (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center text-sm text-red-600">
+                        {unconfirmedError}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!unconfirmedLoading && !unconfirmedError && unconfirmedPolicies.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">
+                        No policies found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!unconfirmedError &&
+                    unconfirmedPolicies.map((policy) => (
+                      <TableRow key={policy.id} className="relative">
+                        {approvingPolicyId === policy.id && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-75 backdrop-blur-sm z-10 rounded-md">
+                            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                          </div>
+                      )}
+                      <TableCell className="font-medium">{policy.policyNumber}</TableCell>
+                      <TableCell>
+                        <div>
+                          <div className="font-medium">
+                            {policy.firstName} {policy.lastName}
+                          </div>
+                          <div className="text-sm text-gray-500">{policy.email}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {policy.vehicleMake} {policy.vehicleModel}
+                      </TableCell>
+                      <TableCell className="font-mono">{policy.regNumber}</TableCell>
+                      <TableCell>£{Number(policy.cpw || 0).toFixed(2)}</TableCell>
+                      <TableCell>{formatPaymentMethod(policy.paymentMethod)}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {getStatusBadge(policy)}
+                          {policy?.fraudStatus && policy?.fraudStatus !== 'ok' && (
+                            <Badge className={policy.fraudStatus === 'blocked' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}>
+                              {policy.fraudStatus === 'blocked' ? 'Fraud: Blocked' : 'Fraud: Warning'}
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          <div>{formatShortDate(policy.startDate)}</div>
+                          <div className="text-gray-500">to {formatShortDate(policy.endDate)}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleOpenEditDialog(policy)}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedPolicy(policy)
+                              setIsDeleteDialogOpen(true)
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => handleViewPolicy(policy)}>
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleGenerateInvoice(policy.policyNumber, policy.id)}
+                                  disabled={generatingInvoice === policy.id}
+                                >
+                                  {generatingInvoice === policy.id ? (
+                                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <Download className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Generate Invoice</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                          {policy?.fraudStatus && policy?.fraudStatus !== 'ok' && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleOpenFraudDialog(policy)}
+                                  >
+                                    <AlertTriangle className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>View Fraud Details</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                          {/* <Button variant="outline" size="sm" onClick={() => handleViewCustomer(policy)}>
+                            <User className="h-4 w-4" />
+                          </Button> */}
+                          {policy.paymentMethod === 'bank_transfer' && policy.status !== 'completed' && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleApprovePolicy(policy.id)}
+                                    disabled={approvingPolicyId !== null}
+                                  >
+                                    {approvingPolicyId === policy.id ? (
+                                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                      <Check className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Approve</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {!unconfirmedError && (
+                <PaginationControls
+                  page={unconfirmedPage}
+                  totalPages={unconfirmedTotalPages}
+                  totalItems={unconfirmedTotal}
+                  onPageChange={setUnconfirmedPage}
+                />
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
+
+        {/* Edit Policy Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Edit Order</DialogTitle>
+              <DialogDescription>Update order details for {selectedPolicy?.policyNumber}</DialogDescription>
+            </DialogHeader>
+            {editPolicy && (
+              <div className="space-y-4 max-h-96 overflow-y-auto">
+                <div className="grid grid-cols-4 gap-4">
+                  <div>
+                    <Label htmlFor="editTitle">Title</Label>
+                    <Select
+                      value={editPolicy.nameTitle}
+                      onValueChange={(value) => setEditPolicy({ ...editPolicy, nameTitle: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select title" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Mr">Mr</SelectItem>
+                        <SelectItem value="Mrs">Mrs</SelectItem>
+                        <SelectItem value="Miss">Miss</SelectItem>
+                        <SelectItem value="Ms">Ms</SelectItem>
+                        <SelectItem value="Dr">Dr</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="editFirstName">First Name</Label>
+                    <Input
+                      id="editFirstName"
+                      value={editPolicy.firstName}
+                      onChange={(e) => setEditPolicy({ ...editPolicy, firstName: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="editMiddleName">Middle Name</Label>
+                    <Input
+                      id="editMiddleName"
+                      value={editPolicy.middleName}
+                      onChange={(e) => setEditPolicy({ ...editPolicy, middleName: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="editLastName">Last Name</Label>
+                    <Input
+                      id="editLastName"
+                      value={editPolicy.lastName}
+                      onChange={(e) => setEditPolicy({ ...editPolicy, lastName: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="editEmail">Email (Read-only)</Label>
+                  <Input id="editEmail" type="email" value={selectedCustomer?.email || ''} className="bg-gray-50" readOnly />
+                  <p className="text-xs text-gray-500 mt-1">Customer assignment cannot be changed</p>
+                </div>
+                <div>
+                  <Label htmlFor="editPhone">Phone</Label>
+                  <Input
+                    id="editPhone"
+                    value={editPolicy.phone}
+                    onChange={(e) => setEditPolicy({ ...editPolicy, phone: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label>Date of Birth</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <Input
+                        type="text"
+                        value={editPolicy.dateOfBirth.split('-')[2] || ''}
+                        onChange={(e) => {
+                          const day = e.target.value.replace(/\D/g, "").slice(0, 2)
+                          const month = editPolicy.dateOfBirth.split('-')[1] || ''
+                          const year = editPolicy.dateOfBirth.split('-')[0] || ''
+                          setEditPolicy({ ...editPolicy, dateOfBirth: `${year}-${month}-${day}` })
+                        }}
+                        placeholder="DD"
+                        maxLength={2}
+                      />
+                    </div>
+                    <div>
+                      <Input
+                        type="text"
+                        value={editPolicy.dateOfBirth.split('-')[1] || ''}
+                        onChange={(e) => {
+                          const day = editPolicy.dateOfBirth.split('-')[2] || ''
+                          const month = e.target.value.replace(/\D/g, "").slice(0, 2)
+                          const year = editPolicy.dateOfBirth.split('-')[0] || ''
+                          setEditPolicy({ ...editPolicy, dateOfBirth: `${year}-${month}-${day}` })
+                        }}
+                        placeholder="MM"
+                        maxLength={2}
+                      />
+                    </div>
+                    <div>
+                      <Input
+                        type="text"
+                        value={editPolicy.dateOfBirth.split('-')[0] || ''}
+                        onChange={(e) => {
+                          const day = editPolicy.dateOfBirth.split('-')[2] || ''
+                          const month = editPolicy.dateOfBirth.split('-')[1] || ''
+                          const year = e.target.value.replace(/\D/g, "").slice(0, 4)
+                          setEditPolicy({ ...editPolicy, dateOfBirth: `${year}-${month}-${day}` })
+                        }}
+                        placeholder="YYYY"
+                        maxLength={4}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="editPostcode">Postcode</Label>
+                  <div className="flex space-x-2">
+                    <Input
+                      id="editPostcode"
+                      value={editPolicy.postCode}
+                      onChange={(e) => {
+                        setEditPolicy({ ...editPolicy, postCode: e.target.value.toUpperCase() })
+                        setEditPostcodeError("")
+                      }}
+                      placeholder="Enter postcode"
+                    />
+                    <Button
+                      type="button"
+                      onClick={handlePostcodeLookup}
+                      className="bg-teal-600 hover:bg-teal-700 text-white px-6"
+                    >
+                      <Search className="w-4 h-4 mr-2" />
+                      Search
+                    </Button>
+                  </div>
+                  {editPostcodeError && <p className="text-red-600 text-sm mt-2">{editPostcodeError}</p>}
+                </div>
+
+                {showEditAddresses && editAddresses.length > 0 && (
+                  <div>
+                    <Label htmlFor="editAddress">Select Address</Label>
+                    <select
+                      id="editAddress"
+                      value={editPolicy.address}
+                      onChange={(e) => setEditPolicy({ ...editPolicy, address: e.target.value })}
+                      className="w-full h-12 px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    >
+                      <option value="">Select an address...</option>
+                      {editAddresses.map((address: any, index) => (
+                          <option key={index} value={address.address_selector}>
+                            {address.address_selector}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="relative">
+                  <Label htmlFor="editOccupation">Occupation</Label>
+                  <Input
+                    id="editOccupation"
+                    value={editPolicy.occupation}
+                    onChange={(e) => {
+                      setEditPolicy({ ...editPolicy, occupation: e.target.value })
+                      handleOccupationSearch(e.target.value)
+                    }}
+                    onFocus={() => {
+                      if (editPolicy.occupation && filteredOccupations.length > 0) {
+                        setShowOccupationDropdown(true)
+                      }
+                    }}
+                    placeholder="Start typing occupation..."
+                  />
+
+                  {showOccupationDropdown && filteredOccupations.length > 0 && (
+                    <div className="absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                      {filteredOccupations.map((occupation) => (
+                        <button
+                          key={occupation}
+                          type="button"
+                          onClick={() => {
+                            setEditPolicy({ ...editPolicy, occupation })
+                            setShowOccupationDropdown(false)
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-gray-100 text-sm"
+                        >
+                          {occupation}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Vehicle Lookup Section for Edit */}
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="editRegistration">Vehicle Registration</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="editRegistration"
+                        value={editPolicy.regNumber}
+                        onChange={(e) => {
+                          setEditPolicy({ ...editPolicy, regNumber: e.target.value.toUpperCase() })
+                          setEditVehicleLookupError("")
+                          setEditFoundVehicle(null)
+                        }}
+                        placeholder="Enter registration (e.g., AB12 CDE)"
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        onClick={() => handleEditVehicleLookup(editPolicy.regNumber)}
+                        disabled={editVehicleLookupLoading}
+                        className="bg-teal-600 hover:bg-teal-700 text-white px-6 flex items-center space-x-2"
+                      >
+                        {editVehicleLookupLoading ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            <span>Finding...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Car className="w-4 h-4" />
+                            <span>Find</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    {editVehicleLookupError && <p className="text-red-600 text-sm mt-2">{editVehicleLookupError}</p>}
+                  </div>
+
+                  {editFoundVehicle && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <div className="flex items-center space-x-2 mb-3">
+                        <CheckCircle className="w-5 h-5 text-green-600" />
+                        <span className="font-medium text-green-800">Vehicle Found</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <span className="font-medium">Make:</span> {editFoundVehicle.make}
+                        </div>
+                        <div>
+                          <span className="font-medium">Model:</span> {editFoundVehicle.model}
+                        </div>
+                        <div>
+                          <span className="font-medium">Engine:</span> {editFoundVehicle.engineSize}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <Label htmlFor="editVehicleMake">Make</Label>
+                      <Input
+                        id="editVehicleMake"
+                        value={editPolicy.vehicleMake}
+                        onChange={(e) => setEditPolicy({ ...editPolicy, vehicleMake: e.target.value })}
+                        readOnly={!!editFoundVehicle}
+                        className={editFoundVehicle ? "bg-gray-50" : ""}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="editVehicleModel">Model</Label>
+                      <Input
+                        id="editVehicleModel"
+                        value={editPolicy.vehicleModel}
+                        onChange={(e) => setEditPolicy({ ...editPolicy, vehicleModel: e.target.value })}
+                        readOnly={!!editFoundVehicle}
+                        className={editFoundVehicle ? "bg-gray-50" : ""}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="editVehicleValue">Vehicle Value</Label>
+                    <Select
+                      value={editPolicy.vehicleValue}
+                      onValueChange={(value) => setEditPolicy({ ...editPolicy, vehicleValue: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="£1,000 - £5,000">£1,000 - £5,000</SelectItem>
+                        <SelectItem value="£5,000 - £10,000">£5,000 - £10,000</SelectItem>
+                        <SelectItem value="£10,000 - £20,000">£10,000 - £20,000</SelectItem>
+                        <SelectItem value="£20,000 - £30,000">£20,000 - £30,000</SelectItem>
+                        <SelectItem value="£30,000 - £50,000">£30,000 - £50,000</SelectItem>
+                        <SelectItem value="£50,000 - £80,000">£50,000 - £80,000</SelectItem>
+                        <SelectItem value="£80,000+">£80,000+</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="editReason">Reason</Label>
+                    <Select
+                      value={editPolicy.reason}
+                      onValueChange={(value) => setEditPolicy({ ...editPolicy, reason: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Borrowing">Borrowing</SelectItem>
+                        <SelectItem value="Buying/Selling/Testing">Buying/Selling/Testing</SelectItem>
+                        <SelectItem value="Learning">Learning</SelectItem>
+                        <SelectItem value="Maintenance">Maintenance</SelectItem>
+                        <SelectItem value="Other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="editLicenseType">License Type</Label>
+                    <Select
+                      value={editPolicy.licenseType}
+                      onValueChange={(value) => setEditPolicy({ ...editPolicy, licenseType: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Full UK">Full UK</SelectItem>
+                        <SelectItem value="Provisional">Provisional</SelectItem>
+                        <SelectItem value="International">International</SelectItem>
+                        <SelectItem value="Full EU">Full EU</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="editLicenseHeld">License Held</Label>
+                    <Select
+                      value={editPolicy.licenseHeld}
+                      onValueChange={(value) => setEditPolicy({ ...editPolicy, licenseHeld: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Under 1 Year">Under 1 Year</SelectItem>
+                        <SelectItem value="1-2 Years">1-2 Years</SelectItem>
+                        <SelectItem value="2-4 Years">2-4 Years</SelectItem>
+                        <SelectItem value="5-10 Years">5-10 Years</SelectItem>
+                        <SelectItem value="10+ Years">10+ Years</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="editStartDate">Start Date</Label>
+                    <Input
+                      id="editStartDate"
+                      type="date"
+                      value={editPolicy.startDate}
+                      onChange={(e) => setEditPolicy({ ...editPolicy, startDate: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="editEndDate">End Date</Label>
+                    <Input
+                      id="editEndDate"
+                      type="date"
+                      value={editPolicy.endDate}
+                      onChange={(e) => setEditPolicy({ ...editPolicy, endDate: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Start Time</Label>
+                    <div className="flex gap-2">
+                      <Select
+                        value={editPolicy.startTime?.split(':')[0] || ''}
+                        onValueChange={(hour) => {
+                          const minute = editPolicy.startTime?.split(':')[1] || '00';
+                          setEditPolicy({ ...editPolicy, startTime: `${hour}:${minute}` });
+                        }}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Hour" /></SelectTrigger>
+                        <SelectContent className="max-h-48 overflow-y-auto">
+                          {hours.map(h => <SelectItem key={`start-h-${h}`} value={h}>{h}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={editPolicy.startTime?.split(':')[1] || ''}
+                        onValueChange={(minute) => {
+                          const hour = editPolicy.startTime?.split(':')[0] || '00';
+                          setEditPolicy({ ...editPolicy, startTime: `${hour}:${minute}` });
+                        }}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Minute" /></SelectTrigger>
+                        <SelectContent className="max-h-48 overflow-y-auto">
+                          {minutes.map(m => <SelectItem key={`start-m-${m}`} value={m}>{m}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div>
+                    <Label>End Time</Label>
+                    <div className="flex gap-2">
+                      <Select
+                        value={editPolicy.endTime?.split(':')[0] || ''}
+                        onValueChange={(hour) => {
+                          const minute = editPolicy.endTime?.split(':')[1] || '00';
+                          setEditPolicy({ ...editPolicy, endTime: `${hour}:${minute}` });
+                        }}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Hour" /></SelectTrigger>
+                        <SelectContent className="max-h-48 overflow-y-auto">
+                          {hours.map(h => <SelectItem key={`end-h-${h}`} value={h}>{h}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={editPolicy.endTime?.split(':')[1] || ''}
+                        onValueChange={(minute) => {
+                          const hour = editPolicy.endTime?.split(':')[0] || '00';
+                          setEditPolicy({ ...editPolicy, endTime: `${hour}:${minute}` });
+                        }}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Minute" /></SelectTrigger>
+                        <SelectContent className="max-h-48 overflow-y-auto">
+                          {minutes.map(m => <SelectItem key={`end-m-${m}`} value={m}>{m}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="editAmount">Amount (£)</Label>
+                  <Input
+                    id="editAmount"
+                    type="number"
+                    step="0.01"
+                    value={editPolicy.premium}
+                    onChange={(e) => setEditPolicy({ ...editPolicy, premium: Number.parseFloat(e.target.value) })}
+                  />
+                </div>
+                <div>
+                  <Label>Status</Label>
+                  <div className="mt-2">
+                    {selectedPolicy ? getStatusBadge(selectedPolicy) : <Badge variant="secondary">Unknown</Badge>}
+                    <span className="text-sm text-gray-500 ml-2">
+                      (Automatically determined based on dates and times)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Vehicle Modifications Section */}
+                <div className="space-y-4 pt-4 border-t">
+                  <h3 className="text-lg font-semibold">Vehicle Modifications</h3>
+                  <div
+                    className="max-h-60 overflow-y-auto pr-2"
+                    style={{ scrollbarWidth: "thin", scrollbarColor: "#e5e7eb #f9fafb" }}
+                  >
+                    {Object.entries(modificationsData).map(([category, modifications]) => (
+                      <div key={category} className="border-b border-gray-200 pb-4 mb-4 last:border-b-0">
+                        <h4 className="text-base font-semibold text-gray-800 mb-3">{category}</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {modifications.map((modification) => (
+                            <label
+                              key={modification}
+                              className="flex items-center space-x-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={editPolicy.modifications.includes(modification)}
+                                onChange={() => handleEditModificationToggle(modification)}
+                                className="w-4 h-4 appearance-none border-2 border-gray-300 rounded bg-white checked:bg-gray-300 checked:border-gray-300 cursor-pointer focus:ring-2 focus:ring-gray-200 focus:ring-offset-0 relative checked:after:content-['✓'] checked:after:absolute checked:after:text-white checked:after:text-xs checked:after:left-0.5 checked:after:top-[-2px]"
+                              />
+                              <span className="text-sm text-gray-700">{modification}</span>
+                            </label>
+                          ))}
+
+                          <div className="col-span-1 sm:col-span-2">
+                            <label className="flex items-center space-x-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={editShowOtherInput[category] || false}
+                                onChange={() => handleEditOtherToggle(category)}
+                                className="w-4 h-4 appearance-none border-2 border-gray-300 rounded bg-white checked:bg-gray-300 checked:border-gray-300 cursor-pointer focus:ring-2 focus:ring-gray-200 focus:ring-offset-0 relative checked:after:content-['✓'] checked:after:absolute checked:after:text-white checked:after:text-xs checked:after:left-0.5 checked:after:top-[-2px]"
+                              />
+                              <span className="text-sm text-gray-700 font-medium">Other (please specify)</span>
+                            </label>
+
+                            {editShowOtherInput[category] && (
+                              <div className="mt-2 ml-6">
+                                <Input
+                                  type="text"
+                                  placeholder="Enter custom modification..."
+                                  value={editCustomModifications[category] || ""}
+                                  onChange={(e) => handleEditCustomModificationChange(category, e.target.value)}
+                                  className="text-sm"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleUpdatePolicy}>Save Changes</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Policy Dialog */}
+        <Dialog open={isDeleteDialogOpen} onOpenChange={(open) => {
+            setIsDeleteDialogOpen(open)
+            if (!open) {
+              setNotifyOnDelete(false)
+              setDeleteReason("")
+            }
+          }}>
+
+
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-red-500" />
+                Delete Policy
+              </DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete policy {selectedPolicy?.policyNumber}? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={notifyOnDelete}
+                  onChange={(e) => setNotifyOnDelete(e.target.checked)}
+                />
+                Notify user by email
+              </label>
+              {notifyOnDelete && (
+                <div className="space-y-2">
+                  <Label htmlFor="delete-reason">Cancellation reason</Label>
+                  <Input
+                    id="delete-reason"
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                    placeholder="Enter reason shown in cancellation email"
+                  />
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={handleDeletePolicy} disabled={isDeletingPolicy}>
+                {isDeletingPolicy ? "Deleting..." : "Delete Policy"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Fraud Details Modal */}
+        <Dialog open={isFraudDialogOpen} onOpenChange={setIsFraudDialogOpen}>
+          <DialogContent className="max-w-2xl bg-white">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+                Fraud Detection Details
+              </DialogTitle>
+              <DialogDescription>
+                Policy: {selectedFraudPolicy?.policyNumber}
+              </DialogDescription>
+            </DialogHeader>
+            {selectedFraudPolicy && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
+                  <div>
+                    <p className="text-sm text-gray-600 font-medium">Fraud Status</p>
+                    <p className="text-lg font-semibold mt-1">
+                      {selectedFraudPolicy.fraudStatus === 'blocked' ? (
+                        <span className="text-red-600">Blocked</span>
+                      ) : (
+                        <span className="text-yellow-600">Warning</span>
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 font-medium">Fraud Score</p>
+                    <p className="text-lg font-semibold mt-1">{selectedFraudPolicy.fraudScore || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 font-medium">Checked At</p>
+                    <p className="text-sm mt-1">
+                      {selectedFraudPolicy.fraudCheckedAt
+                        ? new Date(selectedFraudPolicy.fraudCheckedAt).toLocaleString()
+                        : 'N/A'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 font-medium">Customer</p>
+                    <p className="text-sm mt-1">
+                      {selectedFraudPolicy.firstName} {selectedFraudPolicy.lastName}
+                    </p>
+                  </div>
+                </div>
+
+                {selectedFraudPolicy.fraudDetails && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-gray-700">Fraud Detection Analysis</p>
+                    <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 max-h-64 overflow-y-auto">
+                      <pre className="text-xs text-gray-700 whitespace-pre-wrap">
+                        {typeof selectedFraudPolicy.fraudDetails === 'string'
+                          ? selectedFraudPolicy.fraudDetails
+                          : JSON.stringify(selectedFraudPolicy.fraudDetails, null, 2)}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+
+                {selectedFraudPolicy.fraudNote && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-gray-700">Admin Notes</p>
+                    <p className="text-sm text-gray-600 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                      {selectedFraudPolicy.fraudNote}
+                    </p>
+                  </div>
+                )}
+
+                {selectedFraudPolicy.fraudStatus !== 'ok' && (
+                  <div className="space-y-3 pt-4 border-t">
+                    <p className="text-sm font-medium text-gray-700">Approve Fraud Flag</p>
+                    <textarea
+                      placeholder="Optional: Add a note about why you're approving this transaction..."
+                      value={fraudApprovalNote}
+                      onChange={(e) => setFraudApprovalNote(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      rows={3}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <DialogFooter className="mt-6">
+              <Button variant="outline" onClick={() => setIsFraudDialogOpen(false)}>
+                Close
+              </Button>
+              {selectedFraudPolicy?.fraudStatus !== 'ok' && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={() => handleRetryFraud(selectedFraudPolicy.id)}
+                    disabled={approvingPolicyId === selectedFraudPolicy?.id}
+                    variant="outline"
+                  >
+                    {approvingPolicyId === selectedFraudPolicy?.id ? (
+                      <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-2" />
+                    ) : null}
+                    Retry Check
+                  </Button>
+
+                  <Button
+                    onClick={() => handleApproveFraud(selectedFraudPolicy.id, fraudApprovalNote)}
+                    disabled={approvingPolicyId === selectedFraudPolicy?.id}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    {approvingPolicyId === selectedFraudPolicy?.id ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                    ) : null}
+                    Approve Fraud
+                  </Button>
+                </div>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Create New Policy Dialog */}
+        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+          <DialogContent className="max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>Create New Policy</DialogTitle>
+              <DialogDescription>Add a new document policy for a customer</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 max-h-96 overflow-y-auto">
+              {/* Customer Selection */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Customer Selection</h3>
+
+                <div className="relative">
+                  <Label htmlFor="customerSearch">Search Existing Customer</Label>
+                  <Input
+                    id="customerSearch"
+                    value={customerSearch}
+                    onChange={(e) => handleCustomerSearch(e.target.value)}
+                    onFocus={() => {
+                      if (customerSearch && filteredCustomers.length > 0) {
+                        setShowCustomerDropdown(true)
+                      }
+                    }}
+                    placeholder="Type customer name or email..."
+                    className="w-full"
+                  />
+
+                  {showCustomerDropdown && filteredCustomers.length > 0 && (
+                    <div className="absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                      {filteredCustomers.map((customer) => (
+                        <button
+                          key={customer.id}
+                          type="button"
+                          onClick={() => selectCustomerForPolicy(customer)}
+                          className="w-full text-left px-3 py-2 hover:bg-gray-100 border-b border-gray-100 last:border-b-0"
+                        >
+                          <div className="font-medium">
+                            {customer.firstName} {customer.lastName}
+                          </div>
+                          <div className="text-sm text-gray-500">{customer.email}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {selectedCustomerForPolicy && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center space-x-2">
+                        <CheckCircle className="w-5 h-5 text-green-600" />
+                        <span className="font-medium text-green-800">Customer Selected</span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setCustomerDetailsLocked(!customerDetailsLocked)}
+                        className="text-xs flex items-center gap-1"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        {customerDetailsLocked ? "Unlock Details" : "Lock Details"}
+                      </Button>
+                    </div>
+                    <div className="text-sm text-gray-700">
+                      <p>
+                        <strong>Name:</strong> {selectedCustomerForPolicy.firstName}{" "}
+                        {selectedCustomerForPolicy.lastName}
+                      </p>
+                      <p>
+                        <strong>Email:</strong> {selectedCustomerForPolicy.email}
+                      </p>
+                      <p>
+                        <strong>Phone:</strong> {selectedCustomerForPolicy.phone}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Customer Information (Auto-filled from selection) */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Customer Information</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <Label htmlFor="newFirstName">First Name</Label>
+                    <Input
+                      id="newFirstName"
+                      value={newPolicy.firstName}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, firstName: e.target.value })}
+                      className={customerDetailsLocked ? "bg-gray-50" : ""}
+                      readOnly={customerDetailsLocked}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newMiddleName">Middle Name</Label>
+                    <Input
+                      id="newMiddleName"
+                      value={newPolicy.middleName}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, middleName: e.target.value })}
+                      className={customerDetailsLocked ? "bg-gray-50" : ""}
+                      readOnly={customerDetailsLocked}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newLastName">Last Name</Label>
+                    <Input
+                      id="newLastName"
+                      value={newPolicy.lastName}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, lastName: e.target.value })}
+                      className={customerDetailsLocked ? "bg-gray-50" : ""}
+                      readOnly={customerDetailsLocked}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="newEmail">Email</Label>
+                    <Input id="newEmail" type="email" value={newPolicy.email} className="bg-gray-50" readOnly />
+                    {selectedCustomerForPolicy && (
+                      <p className="text-xs text-gray-500 mt-1">Email cannot be changed after customer selection</p>
+                    )}
+                  </div>
+                  <div>
+                    <Label htmlFor="newPhone">Phone Number</Label>
+                    <Input
+                      id="newPhone"
+                      value={newPolicy.phoneNumber}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, phoneNumber: e.target.value })}
+                      className={customerDetailsLocked ? "bg-gray-50" : ""}
+                      readOnly={customerDetailsLocked}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="newDateOfBirth">Date of Birth</Label>
+                    <Input
+                      id="newDateOfBirth"
+                      type="date"
+                      value={newPolicy.dateOfBirth}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, dateOfBirth: e.target.value })}
+                      className={customerDetailsLocked ? "bg-gray-50" : ""}
+                      readOnly={customerDetailsLocked}
+                    />
+                  </div>
+                  <div className="relative">
+                    <Label htmlFor="newOccupation">Occupation</Label>
+                    <Input
+                      id="newOccupation"
+                      value={customerDetailsLocked ? newPolicy.occupation : occupationSearch || newPolicy.occupation}
+                      onChange={(e) => {
+                        if (!customerDetailsLocked) {
+                          handleOccupationSearch(e.target.value)
+                          setNewPolicy({ ...newPolicy, occupation: e.target.value })
+                        }
+                      }}
+                      onFocus={() => {
+                        if (!customerDetailsLocked && occupationSearch && filteredOccupations.length > 0) {
+                          setShowOccupationDropdown(true)
+                        }
+                      }}
+                      placeholder="Start typing occupation..."
+                      className={customerDetailsLocked ? "bg-gray-50" : ""}
+                      readOnly={customerDetailsLocked}
+                    />
+
+                    {showOccupationDropdown && filteredOccupations.length > 0 && !customerDetailsLocked && (
+                      <div className="absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                        {filteredOccupations.map((occupation) => (
+                          <button
+                            key={occupation}
+                            type="button"
+                            onClick={() => selectOccupation(occupation)}
+                            className="w-full text-left px-3 py-2 hover:bg-gray-100 text-sm"
+                          >
+                            {occupation}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="newPostcode">Postcode</Label>
+                  <div className="flex space-x-2">
+                    <Input
+                      id="newPostcode"
+                      value={newPolicy.postcode}
+                      onChange={(e) => {
+                        setNewPolicy({ ...newPolicy, postcode: e.target.value.toUpperCase() })
+                        setPostcodeError("")
+                      }}
+                      placeholder="Enter postcode"
+                      className={customerDetailsLocked ? "bg-gray-50" : ""}
+                      readOnly={customerDetailsLocked}
+                    />
+                    <Button
+                      type="button"
+                      onClick={handlePostcodeLookup}
+                      className="bg-teal-600 hover:bg-teal-700 text-white px-6"
+                      disabled={customerDetailsLocked}
+                    >
+                      <Search className="w-4 h-4 mr-2" />
+                      Search
+                    </Button>
+                  </div>
+                  {postcodeError && <p className="text-red-600 text-sm mt-2">{postcodeError}</p>}
+                </div>
+
+                {showAddresses && addresses.length > 0 && (
+                  <div>
+                    <Label htmlFor="newAddress">Select Address</Label>
+                    <select
+                      id="newAddress"
+                      value={newPolicy.address}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, address: e.target.value })}
+                      className="w-full h-12 px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                      disabled={customerDetailsLocked}
+                    >
+                      <option value="">Select an address...</option>
+                      {addresses.map((address, index) => (
+                        <option key={index} value={address}>
+                          {address}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* License Information */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">License Information</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="newLicenseType">License Type</Label>
+                    <Select
+                      value={newPolicy.licenseType}
+                      onValueChange={(value) => setNewPolicy({ ...newPolicy, licenseType: value })}
+                      disabled={customerDetailsLocked}
+                    >
+                      <SelectTrigger className={customerDetailsLocked ? "bg-gray-50" : ""}>
+                        <SelectValue placeholder="Select license type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Full UK License">Full UK License</SelectItem>
+                        <SelectItem value="Provisional License">Provisional License</SelectItem>
+                        <SelectItem value="International License">International License</SelectItem>
+                        <SelectItem value="EU License">EU License</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="newLicenseHeld">License Held</Label>
+                    <Select
+                      value={newPolicy.licenseHeld}
+                      onValueChange={(value) => setNewPolicy({ ...newPolicy, licenseHeld: value })}
+                      disabled={customerDetailsLocked}
+                    >
+                      <SelectTrigger className={customerDetailsLocked ? "bg-gray-50" : ""}>
+                        <SelectValue placeholder="Select duration" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Under 1 Year">Under 1 Year</SelectItem>
+                        <SelectItem value="1-2 Years">1-2 Years</SelectItem>
+                        <SelectItem value="2-4 Years">2-4 Years</SelectItem>
+                        <SelectItem value="5-10 Years">5-10 Years</SelectItem>
+                        <SelectItem value="10+ Years">10+ Years</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Vehicle Information with Lookup */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Vehicle Information</h3>
+
+                {/* Vehicle Registration Lookup */}
+                <div>
+                  <Label htmlFor="newVehicleReg">Vehicle Registration</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="newVehicleReg"
+                      value={newPolicy.vehicleReg}
+                      onChange={(e) => {
+                        setNewPolicy({ ...newPolicy, vehicleReg: e.target.value.toUpperCase() })
+                        setVehicleLookupError("")
+                        setFoundVehicle(null)
+                      }}
+                      placeholder="Enter registration (e.g., AB12 CDE)"
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      onClick={handleVehicleLookup}
+                      disabled={vehicleLookupLoading || !newPolicy.vehicleReg.trim()}
+                      className="bg-teal-600 hover:bg-teal-700 text-white px-6 flex items-center space-x-2"
+                    >
+                      {vehicleLookupLoading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Finding...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Car className="w-4 h-4" />
+                          <span>Find</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  {vehicleLookupError && <p className="text-red-600 text-sm mt-2">{vehicleLookupError}</p>}
+                </div>
+
+                {/* Vehicle Found Display */}
+                {foundVehicle && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="flex items-center space-x-2 mb-3">
+                      <CheckCircle className="w-5 h-5 text-green-600" />
+                      <span className="font-medium text-green-800">Vehicle Found</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="font-medium">Make:</span> {foundVehicle.make}
+                      </div>
+                      <div>
+                        <span className="font-medium">Model:</span> {foundVehicle.model}
+                      </div>
+                      <div>
+                        <span className="font-medium">Engine:</span> {foundVehicle.engineSize}
+                      </div>
+                      <div>
+                        <span className="font-medium">Fuel Type:</span> {foundVehicle.fuelType}
+                      </div>
+                      <div>
+                        <span className="font-medium">Colour:</span> {foundVehicle.colour}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Demo Registrations Helper */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="text-sm text-blue-800">
+                    <p className="font-medium mb-2">Demo Registrations (for testing):</p>
+                    <div className="grid grid-cols-1 gap-1">
+                      {DEMO_REGISTRATIONS.map((demo, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => {
+                            const reg = demo.split(" - ")[0]
+                            setNewPolicy({ ...newPolicy, vehicleReg: reg })
+                            setVehicleLookupError("")
+                            setFoundVehicle(null)
+                          }}
+                          className="text-left hover:bg-blue-100 px-2 py-1 rounded text-xs"
+                        >
+                          {demo}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Vehicle Details (Auto-filled or Manual) */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <Label htmlFor="newVehicleMake">Make</Label>
+                    <Input
+                      id="newVehicleMake"
+                      value={newPolicy.vehicleMake}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, vehicleMake: e.target.value })}
+                      readOnly={!!foundVehicle}
+                      className={foundVehicle ? "bg-gray-50" : ""}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newVehicleModel">Model</Label>
+                    <Input
+                      id="newVehicleModel"
+                      value={newPolicy.vehicleModel}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, vehicleModel: e.target.value })}
+                      readOnly={!!foundVehicle}
+                      className={foundVehicle ? "bg-gray-50" : ""}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="newVehicleValue">Vehicle Value</Label>
+                  <Select
+                    value={newPolicy.vehicleValue}
+                    onValueChange={(value) => setNewPolicy({ ...newPolicy, vehicleValue: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select value range" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="£1,000 - £5,000">£1,000 - £5,000</SelectItem>
+                      <SelectItem value="£5,000 - £10,000">£5,000 - £10,000</SelectItem>
+                      <SelectItem value="£10,000 - £20,000">£10,000 - £20,000</SelectItem>
+                      <SelectItem value="£20,000 - £30,000">£20,000 - £30,000</SelectItem>
+                      <SelectItem value="£30,000 - £50,000">£30,000 - £50,000</SelectItem>
+                      <SelectItem value="£50,000 - £80,000">£50,000 - £80,000</SelectItem>
+                      <SelectItem value="£80,000+">£80,000+</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Policy Details */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Order Details</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="newStartDate">Start Date</Label>
+                    <Input
+                      id="newStartDate"
+                      type="date"
+                      value={newPolicy.startDate}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, startDate: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newEndDate">End Date</Label>
+                    <Input
+                      id="newEndDate"
+                      type="date"
+                      value={newPolicy.endDate}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, endDate: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="newStartTime">Start Time</Label>
+                    <Input
+                      id="newStartTime"
+                      type="time"
+                      value={newPolicy.startTime}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, startTime: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newEndTime">End Time</Label>
+                    <Input
+                      id="newEndTime"
+                      type="time"
+                      value={newPolicy.endTime}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, endTime: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="newAmount">Amount (£)</Label>
+                    <Input
+                      id="newAmount"
+                      type="number"
+                      step="0.01"
+                      value={newPolicy.amount}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, amount: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="newReason">Reason</Label>
+                    <Select
+                      value={newPolicy.reason}
+                      onValueChange={(value) => setNewPolicy({ ...newPolicy, reason: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select reason" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Borrowing">Borrowing</SelectItem>
+                        <SelectItem value="Buying/Selling/Testing">Buying/Selling/Testing</SelectItem>
+                        <SelectItem value="Learning">Learning</SelectItem>
+                        <SelectItem value="Maintenance">Maintenance</SelectItem>
+                        <SelectItem value="Other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsCreateDialogOpen(false)
+                  resetNewPolicyForm()
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleCreatePolicy}>
+                Create Policy
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Customer Details Dialog */}
+        <Dialog open={isCustomerDialogOpen} onOpenChange={setIsCustomerDialogOpen}>
+          <DialogContent className="max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>Customer Details</DialogTitle>
+              <DialogDescription>
+                Complete customer information and policy history for {selectedCustomer?.firstName}{" "}
+                {selectedCustomer?.lastName}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-6">
+              {/* Customer Information */}
+              <div className="grid grid-cols-2 gap-6">
+                <div>
+                  <h3 className="text-lg font-semibold mb-4">Personal Information</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="font-medium">Name:</span>
+                      <span>
+                        {selectedCustomer?.firstName} {selectedCustomer?.middleName} {selectedCustomer?.lastName}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Email:</span>
+                      <span>{selectedCustomer?.email}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Phone:</span>
+                      <span>{selectedCustomer?.phone}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Date of Birth:</span>
+                      <span>{selectedCustomer?.dateOfBirth}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Address:</span>
+                      <span className="text-right">{selectedCustomer?.address}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Postcode:</span>
+                      <span>{selectedCustomer?.postCode}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Occupation:</span>
+                      <span>{selectedCustomer?.occupation}</span>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold mb-4">Account Summary</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="font-medium">Customer Since:</span>
+                      <span>{selectedCustomer?.createdAt}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Total Docs:</span>
+                      <span>{selectedCustomer?.quotes?.length || 0}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Total Spent:</span>
+                      <span>£{(selectedCustomer?.totalSpent || 0).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">License Type:</span>
+                      <span>{selectedCustomer?.licenseType}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">License Held:</span>
+                      <span>{selectedCustomer?.licenseHeld}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Policy History */}
+              <div>
+                <h3 className="text-lg font-semibold mb-4">Policy History</h3>
+                <div className="border rounded-lg">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Policy Number</TableHead>
+                        <TableHead>Vehicle</TableHead>
+                        <TableHead>Registration</TableHead>
+                        <TableHead>Period</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedCustomer?.quotes.map((policy:any) => (
+                        <TableRow key={policy.id}>
+                          <TableCell className="font-medium">{policy.policyNumber}</TableCell>
+                          <TableCell>
+                            {policy.vehicleMake} {policy.vehicleModel}
+                          </TableCell>
+                          <TableCell className="font-mono">{policy.regNumber}</TableCell>
+                          <TableCell>
+                            <div className="text-sm">
+                              <div>{formatDateTime(policy.startDate, '00:00')}</div>
+                              <div className="text-gray-500">to {formatDateTime(policy.endDate, '23:59')}</div>
+                            </div>
+                          </TableCell>
+                          <TableCell>£{Number(policy.cpw || 0).toFixed(2)}</TableCell>
+                          <TableCell>{getStatusBadge(policy)}</TableCell>
+                          <TableCell>
+                            <Button variant="outline" size="sm" onClick={() => handleViewPolicy(policy)}>
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setIsCustomerDialogOpen(false)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </CardContent>
+    </Card>
+  )
+}

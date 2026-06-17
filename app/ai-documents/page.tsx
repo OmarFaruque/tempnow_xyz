@@ -1,0 +1,2053 @@
+"use client";
+
+import React from "react";
+
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Button } from "@/components/ui/button";
+import { AuthDialog } from "@/components/auth/auth-dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuth } from "@/context/auth";
+import Cookies from "js-cookie";
+import Link from "next/link";
+import {
+  Download,
+  Sparkles,
+  Paperclip,
+  Edit3,
+  FileText,
+  Tag,
+  CreditCard,
+  ChevronDown,
+  ChevronUp,
+  Zap,
+  Clock,
+  Shield,
+  X,
+  Menu,
+  Mail,
+  Lock,
+  Eye,
+  EyeOff,
+  AlertCircle,
+  Loader2,
+  Info,
+  ImagePlus,
+} from "lucide-react";
+
+import { useToast } from "@/hooks/use-toast";
+import usePaddle from "@/hooks/use-paddle";
+import { loadStripe, Stripe } from "@stripe/stripe-js";
+import { useSearchParams } from "next/navigation";
+import {
+  Elements,
+  useStripe,
+  useElements,
+  CardElement,
+} from "@stripe/react-stripe-js";
+import Airwallex from "airwallex-payment-elements";
+
+import { 
+  PaymentForm, 
+  CreditCard as SquareCreditCard 
+} from 'react-square-web-payments-sdk';
+
+import { useSettings } from "@/context/settings";
+
+const StripePayment = React.forwardRef(
+  (
+    {
+      docData,
+      user,
+      discount,
+      finalPrice,
+      onProcessingChange,
+      onPaymentSuccess,
+    }: {
+      docData: { prompt: string; content: string; price: number };
+      user: { id: number; email: string };
+      discount: number;
+      finalPrice: number;
+      onProcessingChange: (processing: boolean) => void;
+      onPaymentSuccess: (
+        documentUuid: string,
+        content: { prompt: string; content: string; price: number },
+      ) => void;
+    },
+    ref,
+  ) => {
+    const stripe = useStripe();
+    const elements = useElements();
+    const { toast } = useToast();
+
+    React.useImperativeHandle(ref, () => ({
+      async handlePayment() {
+        if (!stripe || !elements) {
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: "Stripe is not available. Please try again later.",
+          });
+          onProcessingChange(false);
+          return;
+        }
+        onProcessingChange(true);
+
+        try {
+          const response = await fetch(
+            "/api/ai-documents/create-stripe-payment",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                docData,
+                user,
+                discount,
+              }),
+            },
+          );
+
+          const { clientSecret, error: clientSecretError } =
+            await response.json();
+
+          if (clientSecretError) {
+            toast({
+              variant: "destructive",
+              title: "Payment Error",
+              description:
+                clientSecretError.message ||
+                "Could not initiate payment. Please try again.",
+            });
+            onProcessingChange(false);
+            return;
+          }
+
+          const cardElement = elements.getElement(CardElement);
+
+          if (!cardElement) {
+            toast({
+              variant: "destructive",
+              title: "Payment Error",
+              description: "Card element not found. Please try again later.",
+            });
+            onProcessingChange(false);
+            return;
+          }
+
+          const { error, paymentIntent } = await stripe.confirmCardPayment(
+            clientSecret,
+            {
+              payment_method: {
+                card: cardElement,
+              },
+            },
+          );
+
+          if (error) {
+            toast({
+              variant: "destructive",
+              title: "Payment Error",
+              description:
+                error.message ||
+                "An unexpected error occurred. Please try again.",
+            });
+          } else if (paymentIntent.status === "succeeded") {
+            toast({
+              title: "Payment Successful",
+              description: "Your payment has been processed successfully.",
+            });
+
+            fetch("/api/ai-documents/save-document", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${Cookies.get("auth_token")}`,
+              },
+              body: JSON.stringify({
+                docDetails: {
+                  prompt: docData.prompt,
+                  content: docData.content,
+                  price: finalPrice,
+                },
+                userDetails: user,
+                transaction: paymentIntent,
+              }),
+            })
+              .then((response) => {
+                if (!response.ok) {
+                  throw new Error("Failed to save document");
+                }
+                return response.json();
+              })
+              .then((data) => {
+                onPaymentSuccess(data.documentUuid, docData);
+              })             
+              .catch((error) => {
+                console.error("Error saving AI document:", error);
+                toast({
+                  variant: "destructive",
+                  title: "Document Save Failed",
+                  description:
+                    "An error occurred while saving the document. Please try again.",
+                });
+              });
+          }
+        } catch (error) {
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: "An unexpected error occurred. Please try again.",
+          });
+        } finally {
+          onProcessingChange(false);
+        }
+      },
+    }));
+
+    return (
+      <div className="border border-gray-200 rounded-xl p-4">
+        <CardElement
+          options={{
+            style: {
+              base: {
+                fontSize: "16px",
+                color: "#424770",
+                "::placeholder": {
+                  color: "#aab7c4",
+                },
+              },
+              invalid: {
+                color: "#9e2146",
+              },
+            },
+          }}
+        />
+      </div>
+    );
+  },
+);
+StripePayment.displayName = "StripePayment";
+
+function AIDocumentsPage({ 
+  paymentProvider 
+}: { 
+  paymentProvider: string | null 
+}) {
+
+  type ImageAttachment = {
+    id: string;
+    file: File;
+    previewUrl: string;
+  };
+  const [activeTab, setActiveTab] = useState("document");
+  const [documentRequest, setDocumentRequest] = useState("");
+  const [generatedText, setGeneratedText] = useState("");
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>(
+    [],
+  );
+  const [generatedImageUrl, setGeneratedImageUrl] = useState("");
+  const [paidImageDownloadUrl, setPaidImageDownloadUrl] = useState("");
+  const [activePurchaseType, setActivePurchaseType] = useState<"document" | "image">("document");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [showOutput, setShowOutput] = useState(false);
+  const [showPaymentPopup, setShowPaymentPopup] = useState(false);
+  const [discountCode, setDiscountCode] = useState("");
+  const settings = useSettings();
+  const [appliedDiscount, setAppliedDiscount] = useState(null);
+  const [expandedSection, setExpandedSection] = useState("");
+  const { isAuthenticated, user } = useAuth();
+  const searchParams = useSearchParams();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
+
+  const { toast } = useToast();
+  const { paddle, loading: isPaddleLoading } = usePaddle();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const airwallexCardRef = useRef(null);
+  const [airwallexElement, setAirwallexElement] = useState(null);
+  const [documentPrice, setDocumentPrice] = useState(settings?.openai?.price ?? 10);
+  const stripePaymentRef = useRef<{ handlePayment: () => Promise<void> }>(null);
+  const generatedImageSectionRef = useRef<HTMLDivElement | null>(null);
+  const processedImagePaymentRef = useRef(false);
+  const [isApplyingDiscount, setIsApplyingDiscount] = useState(false);
+
+
+  useEffect(() => {
+    const defaultPrice = 10;
+    if (settings && settings.openai) {
+      const minPrice = settings.openai.minPrice;
+      const maxPrice = settings.openai.maxPrice;
+
+      if (typeof minPrice === 'number' && typeof maxPrice === 'number' && minPrice < maxPrice) {
+        const randomPrice = Math.floor(Math.random() * (maxPrice - minPrice + 1)) + minPrice;
+        setDocumentPrice(randomPrice);
+      } else {
+        setDocumentPrice(settings.openai.price ?? defaultPrice);
+      }
+    } else {
+      setDocumentPrice(defaultPrice);
+    }
+  }, [settings]);
+
+
+
+  useEffect(() => {
+    return () => {
+      imageAttachments.forEach((attachment) =>
+        URL.revokeObjectURL(attachment.previewUrl),
+      );
+    };
+  }, [imageAttachments]);
+
+
+  useEffect(() => {
+    if (!generatedImageUrl) return;
+    const timer = window.setTimeout(() => {
+      generatedImageSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 100);
+
+    return () => window.clearTimeout(timer);
+  }, [generatedImageUrl]);
+
+
+  const getDiscountAmount = useCallback(() => {
+    if (!appliedDiscount || appliedDiscount.error) return 0;
+    if (appliedDiscount.discount.type === "percentage") {
+      return (documentPrice * appliedDiscount.discount.value) / 100;
+    } else {
+      return Math.min(documentPrice, appliedDiscount.discount.value);
+    }
+  }, [appliedDiscount, documentPrice]);
+
+  useEffect(() => {
+    if (paymentProvider === "airwallex" && showPaymentPopup) {
+      const initAirwallex = async () => {
+        try {
+          await Airwallex.loadAirwallex({ env: "demo" });
+          const response = await fetch(
+            "/api/ai-documents/create-airwallex-payment",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                docData: {
+                  prompt: documentRequest,
+                  content: generatedText,
+                  price: documentPrice,
+                },
+                user: user,
+                discount: appliedDiscount ? getDiscountAmount() : 0,
+              }),
+            },
+          );
+          const { clientSecret, intentId } = await response.json();
+
+          const cardElement = Airwallex.createElement("card", {
+            intent: {
+              id: intentId,
+              client_secret: clientSecret,
+            },
+          });
+          cardElement.mount(airwallexCardRef.current);
+          setAirwallexElement(cardElement);
+        } catch (error) {
+          console.error("Airwallex initialization failed:", error);
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: "Failed to initialize Airwallex.",
+          });
+        }
+      };
+      initAirwallex();
+    }
+  }, [
+    paymentProvider, 
+    showPaymentPopup, 
+    documentRequest, 
+    generatedText, 
+    documentPrice, 
+    user, 
+    appliedDiscount, 
+    getDiscountAmount, 
+    toast,
+  ]);
+
+  const quickTemplates = useMemo(
+    () => [
+      "Write a comprehensive marketing strategy for a new mobile app",
+      "Create a detailed technical specification for a web platform",
+      "Draft a professional investor pitch deck for a fintech startup",
+      "Develop a strategic business expansion plan for international markets",
+    ],
+    [],
+  );
+
+  const handleTemplateClick = useCallback((template: string) => {
+    setDocumentRequest(template);
+  }, []);
+
+  const handleImageAttachmentChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const incomingFiles = Array.from(event.target.files || []);
+      if (!incomingFiles.length) return;
+
+      const validFiles = incomingFiles.filter((file) => {
+        const isValidType = file.type.startsWith("image/");
+        const isValidSize = file.size <= 5 * 1024 * 1024;
+        if (!isValidType || !isValidSize) {
+          toast({
+            variant: "destructive",
+            title: "Invalid file",
+            description: "Please upload image files up to 5MB.",
+          });
+          return false;
+        }
+        return true;
+      });
+
+      setImageAttachments((previous) => {
+        const availableSlots = Math.max(0, 4 - previous.length);
+        const filesToAdd = validFiles.slice(0, availableSlots).map((file) => ({
+          id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+        }));
+
+        if (validFiles.length > availableSlots) {
+          toast({
+            variant: "destructive",
+            title: "Attachment limit reached",
+            description: "You can attach up to 4 reference images.",
+          });
+        }
+
+        return [...previous, ...filesToAdd];
+      });
+
+      event.target.value = "";
+    },
+    [toast],
+  );
+
+  const removeImageAttachment = useCallback((id: string) => {
+    setImageAttachments((previous) => {
+      const target = previous.find((attachment) => attachment.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return previous.filter((attachment) => attachment.id !== id);
+    });
+  }, []);
+
+
+  const generateDocument = useCallback(async () => {
+    if (!documentRequest.trim()) return;
+
+    setIsGenerating(true);
+
+    try {
+      const token = Cookies.get("auth_token");
+      const headers: HeadersInit = {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      };
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      const response = await fetch("/api/ai-documents", {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify({
+          prompt: documentRequest,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.error || `HTTP error! Status: ${response.status}`,
+        );
+      }
+
+      const data = await response.json();
+
+      if (data.content) {
+        setGeneratedText(data.content);
+        // setDocumentPrice(data.price);
+        setShowOutput(true);
+      } else {
+        throw new Error("No content received from the server.");
+      }
+    } catch (error) {
+      console.error("Error generating document:", error);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [documentRequest]);
+
+
+  const generateImage = useCallback(async () => {
+    if (!imagePrompt.trim()) return;
+
+    setIsGeneratingImage(true);
+
+    try {
+      const token = Cookies.get("auth_token");
+      const headers: HeadersInit = {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      };
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      const attachments = await Promise.all(
+        imageAttachments.map(
+          (attachment) =>
+            new Promise<{
+              filename: string;
+              mimeType: string;
+              dataUrl: string;
+            }>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () =>
+                resolve({
+                  filename: attachment.file.name,
+                  mimeType: attachment.file.type,
+                  dataUrl: reader.result as string,
+                });
+              reader.onerror = reject;
+              reader.readAsDataURL(attachment.file);
+            }),
+        ),
+      );
+
+      const response = await fetch("/api/ai-images", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          prompt: imagePrompt,
+          attachments,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to generate image.");
+      }
+
+      if (!data.imageUrl) {
+        throw new Error("No image returned by the model.");
+      }
+
+      setGeneratedImageUrl(data.imageUrl);
+      setPaidImageDownloadUrl("");
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Image generation failed",
+        description: error.message || "Please try again.",
+      });
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  }, [imagePrompt, imageAttachments, toast]);
+
+
+
+
+
+  const handleGenerateDocument = useCallback(async () => {
+    if (!documentRequest.trim()) return;
+
+    if (!isAuthenticated) {
+      setIsAuthDialogOpen(true);
+      return;
+    }
+
+    await generateDocument();
+  }, [documentRequest, isAuthenticated, generateDocument]);
+
+
+
+  /** Image generate request handler */
+  const handleGenerateImage = useCallback(async () => {
+    if (!imagePrompt.trim()) return;
+
+    if (!isAuthenticated) {
+      setIsAuthDialogOpen(true);
+      return;
+    }
+
+    await generateImage();
+  }, [imagePrompt, isAuthenticated, generateImage]);
+
+
+  const handleEditRequest = useCallback(() => {
+    setShowOutput(false);
+  }, []);
+
+  const handleDownloadPDF = useCallback(() => {
+      setActivePurchaseType("document");
+      setShowPaymentPopup(true);
+  }, []);
+
+  const handleUnlockImageDownload = useCallback(() => {
+      setActivePurchaseType("image");
+      setShowPaymentPopup(true);
+  }, []);
+
+  const finalPrice = documentPrice - getDiscountAmount();
+
+  const normalizedPaymentProvider = useMemo(
+    () => (paymentProvider || "").toLowerCase(),
+    [paymentProvider],
+  );
+
+  const isImageDownloadPaymentSupported = useMemo(() => {
+    return normalizedPaymentProvider.length > 0;
+  }, [normalizedPaymentProvider]);
+
+  const handleImageDownloadClick = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (isImageDownloadPaymentSupported) return;
+
+      event.preventDefault();
+      toast({
+        variant: "destructive",
+        title: "Payment Gateway Not Supported",
+        description:
+          "Image download unlock is currently available only when an active payment gateway is configured in Settings.",
+      });
+    },
+    [isImageDownloadPaymentSupported, toast],
+  );
+
+
+  const triggerImageDownload = useCallback((downloadUrl: string) => {
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.setAttribute("download", "");
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, []);
+
+   const waitForPaidImageAndDownload = useCallback(
+    async (downloadUrl: string, maxAttempts = 8) => {
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const response = await fetch(downloadUrl, {
+          method: "GET",
+          credentials: "include",
+        });
+
+        if (response.ok) {
+          triggerImageDownload(downloadUrl);
+          return;
+        }
+
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(1500 * (attempt + 1), 5000)),
+        );
+      }
+
+      toast({
+        variant: "destructive",
+        title: "Download pending",
+        description:
+          "Payment is completed, but the download is still processing. Please click Download again in a few seconds.",
+      });
+    },
+    [toast, triggerImageDownload],
+  );
+
+  useEffect(() => {
+    const paymentStatus = searchParams.get("payment");
+    const purchaseType = searchParams.get("type");
+    const documentUuid = searchParams.get("document");
+
+    if (
+      paymentStatus !== "success" ||
+      purchaseType !== "image" ||
+      !documentUuid ||
+      processedImagePaymentRef.current
+    ) {
+      return;
+    }
+
+    processedImagePaymentRef.current = true;
+    const downloadUrl = `/api/ai-images/download/${documentUuid}`;
+    setPaidImageDownloadUrl(downloadUrl);
+    setActivePurchaseType("image");
+    setShowPaymentPopup(false);
+    toast({
+      title: "Payment successful",
+      description: "Your image is ready. Download started automatically.",
+    });
+    triggerImageDownload(downloadUrl);
+  }, [searchParams, toast, triggerImageDownload]);
+
+  useEffect(() => {
+    const onPaddleImagePaymentCompleted = (rawEvent: Event) => {
+      const event = rawEvent as CustomEvent<{
+        documentId?: string;
+        documentUuid?: string;
+      }>;
+      const documentUuid =
+        event.detail?.documentUuid ||
+        sessionStorage.getItem("pendingAiImageDocumentUuid");
+
+      if (!documentUuid) return;
+
+      sessionStorage.removeItem("pendingAiImageDocumentUuid");
+      paddle?.Checkout.close();
+      setShowPaymentPopup(false);
+
+      const downloadUrl = `/api/ai-images/download/${documentUuid}`;
+      setPaidImageDownloadUrl(downloadUrl);
+      toast({
+        title: "Payment successful",
+        description: "Your image is ready. Download started automatically.",
+      });
+      waitForPaidImageAndDownload(downloadUrl);
+    };
+
+    window.addEventListener(
+      "ai-paddle-payment-completed",
+      onPaddleImagePaymentCompleted,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "ai-paddle-payment-completed",
+        onPaddleImagePaymentCompleted,
+      );
+    };
+  }, [paddle, toast, waitForPaidImageAndDownload]);
+
+
+  const handlePaidContent = useCallback(
+    (documentUuid: string, content: { prompt: string; content: string }) => {
+      if (activePurchaseType === "document") {
+        localStorage.setItem("aiDocumentContent", content.content);
+        localStorage.setItem(
+          "aiDocumentType",
+          content.prompt.substring(0, 100) + "...",
+        );
+        localStorage.setItem("aiDocumentUuid", documentUuid);
+        window.location.href = "/ai-payment-confirmation";
+        return;
+      }
+
+      setPaidImageDownloadUrl(`/api/ai-images/download/${documentUuid}`);
+      setShowPaymentPopup(false);
+      toast({
+        title: "Payment successful",
+        description: "Your image is ready. Download started automatically.",
+      });
+      triggerImageDownload(`/api/ai-images/download/${documentUuid}`);
+    },
+    [activePurchaseType, toast, triggerImageDownload],
+  );
+  
+  const handlePayment = useCallback(async (token) => {
+    switch (paymentProvider) {
+      case 'square':
+          if (token) {
+              setIsSubmitting(true);
+              try {
+                  const response = await fetch('/api/ai-documents/create-square-payment', {
+                      method: 'POST',
+                      headers: {
+                          'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify({
+                          sourceId: token.token,
+                          docData: {
+                            prompt: documentRequest,
+                            content: generatedText,
+                            price: documentPrice,
+                        },
+                        user: user,
+                        discount: appliedDiscount ? getDiscountAmount() : 0,
+                      }),
+                  });
+
+                  if (response.ok) {
+                    toast({
+                        title: "Payment Successful",
+                        description: "Your payment has been processed successfully.",
+                    });
+                    fetch("/api/ai-documents/save-document", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${Cookies.get("auth_token")}`,
+                        },
+                        body: JSON.stringify({
+                          docDetails: activePurchaseType === "document"
+                            ? {
+                                prompt: documentRequest,
+                                content: generatedText,
+                                price: finalPrice,
+                              }
+                            : {
+                                prompt: `AI image: ${imagePrompt}`,
+                                content: generatedImageUrl,
+                                price: finalPrice,
+                          },
+                          userDetails: user,
+                          transaction: 'paid',
+                        }),
+                      })
+                        .then((response) => {
+                          if (!response.ok) {
+                            throw new Error("Failed to save document");
+                          }
+                          return response.json();
+                        })
+                        .then((data) => {
+                          handlePaidContent(data.documentUuid, {
+                            prompt:
+                              activePurchaseType === "document"
+                                ? documentRequest
+                                : `AI image: ${imagePrompt}`,
+                            content:
+                              activePurchaseType === "document"
+                                ? generatedText
+                                : generatedImageUrl,
+                          });
+                        })
+                        .catch((error) => {
+                          console.error("Error saving AI document:", error);
+                          toast({
+                            variant: "destructive",
+                            title: "Document Save Failed",
+                            description:
+                              "An error occurred while saving the document. Please try again.",
+                          });
+                        });
+                  } else {
+                    const error = await response.json();
+                    toast({
+                        variant: "destructive",
+                        title: "Payment Error",
+                        description: error.details || "An unexpected error occurred. Please try again.",
+                    });
+                  }
+              } catch (error) {
+                  toast({
+                      variant: "destructive",
+                      title: "Payment Error",
+                      description: "An unexpected error occurred. Please try again.",
+                  });
+              } finally {
+                  setIsSubmitting(false);
+              }
+          }
+          break;
+      case 'paddle':
+        if (!paddle) {
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: "Paddle is not available. Please try again later.",
+          });
+          return;
+        }
+
+        setIsSubmitting(true);
+
+        try {
+          const response = await fetch("/api/ai-documents/create-payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+           body: JSON.stringify({
+                docData: {
+                prompt:
+                  activePurchaseType === "document"
+                    ? documentRequest
+                    : `AI image: ${imagePrompt}`,
+                content:
+                  activePurchaseType === "document"
+                    ? generatedText
+                    : generatedImageUrl,
+                price: documentPrice,
+              },
+              user: user,
+              discount: appliedDiscount ? getDiscountAmount() : 0,
+            }),
+          });
+
+          const data = await response.json();
+
+          if (data.priceId) {
+            paddle.Checkout.open({
+              items: [
+                {
+                  priceId: data.priceId,
+                  quantity: 1,
+                },
+              ],
+              customer: {
+                email: user.email,
+              },
+              customData: data.documentId
+                ? activePurchaseType === "image"
+                  ? {
+                      document_id: String(data.documentId),
+                      document_uuid: data.documentUuid,
+                      purchase_type: activePurchaseType,
+                    }
+                  : {
+                      document_details: JSON.stringify({
+                        prompt: documentRequest,
+                        content: generatedText,
+                        price: documentPrice,
+                      }),
+                      user_details: JSON.stringify(user),
+                    }
+                : undefined,
+            });
+            if (activePurchaseType === "image" && data.documentUuid) {
+              sessionStorage.setItem(
+                "pendingAiImageDocumentUuid",
+                data.documentUuid,
+              );
+            }
+          } else {
+            toast({
+              variant: "destructive",
+              title: "Payment Error",
+              description:
+                data.error || "Could not initiate payment. Please try again.",
+            });
+          }
+        } catch (error) {
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: "An unexpected error occurred. Please try again.",
+          });
+        } finally {
+          setIsSubmitting(false);
+        }
+        break;
+      case 'mollie':
+        setIsSubmitting(true);
+        try {
+          const response = await fetch("/api/create-payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              docData: {
+                prompt:
+                  activePurchaseType === "document"
+                    ? documentRequest
+                    : `AI image: ${imagePrompt}`,
+                content:
+                  activePurchaseType === "document"
+                    ? generatedText
+                    : generatedImageUrl,
+                price: documentPrice,
+              },
+              user: user,
+              discount: appliedDiscount ? getDiscountAmount() : 0,
+            }),
+          });
+
+          const data = await response.json();
+
+          if (data.checkoutUrl) {
+            window.location.href = data.checkoutUrl;
+          } else {
+            toast({
+              variant: "destructive",
+              title: "Payment Error",
+              description:
+                data.error || "Could not initiate payment. Please try again.",
+            });
+          }
+        } catch (error) {
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: "An unexpected error occurred. Please try again.",
+          });
+        } finally {
+          setIsSubmitting(false);
+        }
+        break;
+      case 'stripe':
+        if (stripePaymentRef.current) {
+          await stripePaymentRef.current.handlePayment();
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: "Stripe component not ready.",
+          });
+          setIsSubmitting(false);
+        }
+        break;
+      case 'airwallex':
+        if (!airwallexElement) {
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: "Airwallex is not ready. Please try again later.",
+          });
+          return;
+        }
+        setIsSubmitting(true);
+        try {
+          await Airwallex.confirmPaymentIntent({
+            element: airwallexElement,
+            id: airwallexElement.intent.id,
+            client_secret: airwallexElement.intent.client_secret,
+          });
+          // Handle success
+          toast({
+            title: "Payment Processing",
+            description: "Your payment is processing. You will receive an email with your document shortly.",
+          });
+        } catch (error: any) {
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description:
+              error.message || "An unexpected error occurred. Please try again.",
+          });
+        } finally {
+          setIsSubmitting(false);
+        }
+        break;
+    }
+  }, [paddle, documentRequest, generatedText, documentPrice, user, appliedDiscount, toast, paymentProvider, airwallexElement, getDiscountAmount, finalPrice, activePurchaseType, imagePrompt, generatedImageUrl, handlePaidContent]);
+
+  const onPayClick = async () => {
+      if (
+        activePurchaseType === "image" &&
+        !isImageDownloadPaymentSupported
+      ) {
+        toast({
+          variant: "destructive",
+          title: "Payment method unavailable",
+          description:
+            "Image download unlock is currently available only when an active payment gateway is configured in Settings.",
+        });
+        return;
+      }
+
+      if (paymentProvider !== 'square') {
+          setIsSubmitting(true);
+          handlePayment();
+      }
+  }
+
+
+  const applyDiscountCode = useCallback(async () => {
+    if (!discountCode.trim()) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Please enter a promo code",
+      });
+      return;
+    }
+
+    setIsApplyingDiscount(true);
+
+    try {
+      const response = await fetch("/api/coupons/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          promoCode: discountCode,
+          total: documentPrice,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (response.status === 400) {
+          toast({
+            variant: "destructive",
+            title: "Invalid Code",
+            description: data.error || "The promo code is invalid or expired.",
+          });
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Error",
+            description: data.error || "Failed to validate promo code.",
+          });
+        }
+        setAppliedDiscount({ error: data.error || "Invalid discount code" });
+      } else {
+        setAppliedDiscount(data);
+        toast({
+          title: "Promo Code Applied",
+          description: `Successfully applied promo code ${data.promoCode}`,
+        });
+      }
+    } catch (error: any) {
+      setAppliedDiscount({ error: "Invalid discount code" });
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "An unexpected error occurred. Please try again.",
+      });
+    } finally {
+      setIsApplyingDiscount(false);
+    }
+  }, [discountCode, documentPrice, toast]);
+
+  const removeDiscount = useCallback(() => {
+    setAppliedDiscount(null);
+    setDiscountCode("");
+  }, []);
+
+  const toggleSection = useCallback((section: string) => {
+    setExpandedSection((prev) => (prev === section ? "" : section));
+  }, []);
+
+  const formatCardNumber = useCallback((value: string) => {
+    const v = value.replace(/\s+/g, "").replace(/[^0-9]/gi, "");
+    const matches = v.match(/\d{4,16}/g);
+    const match = (matches && matches[0]) || "";
+    const parts = [];
+
+    for (let i = 0, len = match.length; i < len; i += 4) {
+      parts.push(match.substring(i, i + 4));
+    }
+
+    return parts.length ? parts.join(" ") : value;
+  }, []);
+
+  const formatExpiry = useCallback((value: string) => {
+    const v = value.replace(/\s+/g, "").replace(/[^0-9]/gi, "");
+    return v.length >= 2 ? `${v.substring(0, 2)} / ${v.substring(2, 4)}` : v;
+  }, []);
+
+  return (
+    <div className="h-screen bg-gradient-to-br from-slate-50 to-teal-50 flex flex-col overflow-hidden">
+      {/* Header */}
+      <header className="bg-teal-600 px-4 sm:px-6 py-3 sm:py-4 shadow-md flex-shrink-0">
+        <div className="flex justify-between items-center">
+          <div className="flex items-center">
+            <Link
+              href="/"
+              className="text-xl sm:text-2xl font-bold text-white hover:text-teal-100 transition-colors"
+            >
+              {settings.general?.siteName}
+            </Link>
+          </div>
+
+          {/* Desktop Navigation */}
+          <div className="hidden sm:flex gap-2 md:gap-3">
+            <Link href="/contact">
+              <Button
+                variant="outline"
+                className="border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent text-sm md:text-base px-3 md:px-4"
+              >
+                Contact
+              </Button>
+            </Link>
+            {isAuthenticated ? (
+              <Link href="/dashboard">
+                <Button
+                  variant="outline"
+                  className="border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent text-sm md:text-base px-3 md:px-4"
+                >
+                  Dashboard
+                </Button>
+              </Link>
+            ) : (
+              <Link href="/login">
+                <Button
+                  variant="outline"
+                  className="border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent text-sm md:text-base px-3 md:px-4"
+                >
+                  Sign In
+                </Button>
+              </Link>
+            )}
+          </div>
+
+          {/* Mobile Menu Button */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="sm:hidden p-2 text-white hover:bg-teal-700 rounded-md transition-colors"
+            aria-label="Toggle mobile menu"
+          >
+            {mobileMenuOpen ? (
+              <X className="w-6 h-6" />
+            ) : (
+              <Menu className="w-6 h-6" />
+            )}
+          </button>
+        </div>
+
+        {/* Mobile Navigation */}
+        {mobileMenuOpen && (
+          <div className="sm:hidden mt-4 pb-4 border-t border-teal-500 pt-4">
+            <div className="flex flex-col space-y-3">
+              <Link href="/contact" onClick={() => setMobileMenuOpen(false)}>
+                <Button
+                  variant="outline"
+                  className="w-full border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent"
+                >
+                  Contact
+                </Button>
+              </Link>
+              {isAuthenticated ? (
+                <Link
+                  href="/dashboard"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <Button
+                    variant="outline"
+                    className="w-full border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent"
+                  >
+                    Dashboard
+                  </Button>
+                </Link>
+              ) : (
+                <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
+                  <Button
+                    variant="outline"
+                    className="w-full border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent"
+                  >
+                    Sign In
+                  </Button>
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 px-4 sm:px-6 py-4 sm:py-6 overflow-y-auto">
+        <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6">
+          {/* Hero Section */}
+          <div className="text-center space-y-3">
+            <div className="inline-flex items-center space-x-2 bg-teal-100 text-teal-800 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium">
+              <Zap className="w-3 h-3 sm:w-4 sm:h-4" />
+              <span>AI-Powered Document Generation</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900 leading-tight px-4">
+              Transform Ideas into
+              <span className="text-teal-600 block">
+                Professional Documents
+              </span>
+            </h1>
+            <p className="text-base sm:text-lg text-gray-600 max-w-2xl mx-auto leading-relaxed px-4">
+              Our advanced AI technology creates high-quality, personalized
+              documents in seconds. From business proposals to technical
+              specifications, get professionally formatted content instantly.
+            </p>
+
+            {/* Feature highlights */}
+            <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-4 sm:gap-6 mt-4 px-4">
+              <div className="flex items-center justify-center sm:justify-start space-x-2 text-gray-600">
+                <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-teal-600" />
+                <span className="text-sm sm:text-base">Instant Generation</span>
+              </div>
+              <div className="flex items-center justify-center sm:justify-start space-x-2 text-gray-600">
+                <Shield className="w-4 h-4 sm:w-5 sm:h-5 text-teal-600" />
+                <span className="text-sm sm:text-base">
+                  Professional Quality
+                </span>
+              </div>
+            </div>
+
+            {/* Pricing Comparison */}
+            <div className="bg-white rounded-xl shadow-md border border-gray-100 p-4 mt-4">
+              <div className="text-center mb-4">
+                <h2 className="text-lg font-bold text-gray-900 mb-2">
+                  How It Works
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Generate unlimited documents for free, download when ready
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
+                {/* Free Section */}
+                <div className="bg-green-50 rounded-lg p-4 border border-green-200 relative">
+                  <div className="absolute -top-2 left-4">
+                    <span className="bg-green-500 text-white text-xs font-bold px-2 py-1 rounded">
+                      FREE
+                    </span>
+                  </div>
+                  <div className="pt-2">
+                    <div className="flex items-center space-x-2 mb-3">
+                      <div className="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center">
+                        <Eye className="w-4 h-4 text-green-600" />
+                      </div>
+                      <h3 className="font-semibold text-gray-900">
+                        Generate & Preview
+                      </h3>
+                    </div>
+                    <ul className="text-sm text-gray-700 space-y-1.5">
+                      <li className="flex items-center space-x-2">
+                        <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                        <span>Unlimited document generation</span>
+                      </li>
+                      <li className="flex items-center space-x-2">
+                        <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                        <span>Full preview & editing</span>
+                      </li>
+                      <li className="flex items-center space-x-2">
+                        <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                        <span>No time limits</span>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Paid Section */}
+                <div className="bg-teal-50 rounded-lg p-4 border border-teal-200 relative">
+                  <div className="absolute -top-2 left-4">
+                    <span className="bg-teal-600 text-white text-xs font-bold px-2 py-1 rounded">
+                      £{documentPrice}
+                    </span>
+                  </div>
+                  <div className="pt-2">
+                    <div className="flex items-center space-x-2 mb-3">
+                      <div className="w-6 h-6 bg-teal-100 rounded-full flex items-center justify-center">
+                        <Download className="w-4 h-4 text-teal-600" />
+                      </div>
+                      <h3 className="font-semibold text-gray-900">
+                        Professional PDF
+                      </h3>
+                    </div>
+                    <ul className="text-sm text-gray-700 space-y-1.5">
+                      <li className="flex items-center space-x-2">
+                        <div className="w-1.5 h-1.5 bg-teal-500 rounded-full"></div>
+                        <span>High-quality PDF format</span>
+                      </li>
+                      <li className="flex items-center space-x-2">
+                        <div className="w-1.5 h-1.5 bg-teal-500 rounded-full"></div>
+                        <span>Print-ready quality</span>
+                      </li>
+                      <li className="flex items-center space-x-2">
+                        <div className="w-1.5 h-1.5 bg-teal-500 rounded-full"></div>
+                        <span>Instant download</span>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 rounded-lg p-3 mt-4 max-w-2xl mx-auto">
+                <div className="flex items-start space-x-2">
+                  <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-blue-800">
+                    <span className="font-medium">
+                      Perfect for trying before buying:
+                    </span>{" "}
+                    Generate and perfect your document completely free, then pay only when you're satisfied and ready to download.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Document Generation Section */}
+          {/* {!showOutput && (
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+              <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-4 sm:px-6 py-4">
+                <div className="flex items-center space-x-3">
+                  <div className="w-6 h-6 sm:w-8 sm:h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                    <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-white" /> */}
+
+          <Tabs
+            value={activeTab}
+            onValueChange={setActiveTab}
+            className="space-y-4"
+          >
+            <div className="flex justify-center">
+              <TabsList className="grid w-full max-w-xl grid-cols-2 h-12 bg-teal-50 border border-teal-100">
+                <TabsTrigger
+                  value="document"
+                  className="text-sm sm:text-base data-[state=active]:text-teal-700"
+                >
+                  <FileText className="w-4 h-4 mr-2" />
+                  AI Document
+                </TabsTrigger>
+                <TabsTrigger
+                  value="image"
+                  className="text-sm sm:text-base data-[state=active]:text-teal-700"
+                >
+                  <ImagePlus className="w-4 h-4 mr-2" />
+                  AI Text to Image
+                </TabsTrigger>
+              </TabsList>
+            </div>
+
+            <TabsContent value="document" className="space-y-4">
+              {!showOutput && (
+                <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+                  <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-4 sm:px-6 py-4">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-6 h-6 sm:w-8 sm:h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                        <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                      </div>
+                      <div>
+                        <h2 className="text-lg sm:text-xl font-bold text-white">
+                          Generate Your Document
+                        </h2>
+                        <p className="text-teal-100 text-sm sm:text-base">
+                          Describe what you need and let our AI create it for
+                          you
+                        </p>
+                      </div>
+                    </div>
+
+                  </div>
+
+
+
+<div className="p-4 sm:p-6 space-y-4 sm:space-y-5">
+                    <div className="relative">
+                      <label className="block text-base sm:text-lg font-semibold text-gray-900 mb-3">
+                        What type of document do you need?
+                      </label>
+                      <div className="relative">
+                        <Textarea
+                          value={documentRequest}
+                          onChange={(e) => setDocumentRequest(e.target.value)}
+                          placeholder="e.g., A comprehensive business proposal for a tech startup, a detailed marketing strategy for a mobile app launch, a technical specification document..."
+                          className="min-h-20 sm:min-h-24 resize-none text-sm sm:text-base border-2 border-gray-200 focus:border-teal-500 rounded-xl"
+                          disabled={isGenerating}
+                        />
+                        <div className="absolute bottom-2 sm:bottom-3 right-2 sm:right-3">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-teal-600 hover:bg-teal-50 hover:text-teal-700 flex items-center space-x-1 sm:space-x-2 text-xs sm:text-sm"
+                          >
+                            <Paperclip className="w-3 h-3 sm:w-4 sm:h-4" />
+                            <span className="hidden sm:inline">
+                              Attach Files
+                            </span>
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <h3 className="text-sm sm:text-base font-semibold text-gray-900">
+                        Quick Start Templates
+                      </h3>
+                      <div className="grid grid-cols-1 gap-3">
+                        {quickTemplates.map((template, index) => (
+                          <button
+                            key={index}
+                            onClick={() => handleTemplateClick(template)}
+                            className="flex items-start space-x-3 p-4 border-2 border-gray-200 rounded-xl hover:border-teal-400 hover:bg-teal-50 transition-all duration-200 text-left group touch-manipulation"
+                            disabled={isGenerating}
+                          >
+                            <div className="w-8 h-8 bg-teal-100 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-teal-200 transition-colors">
+                              <FileText className="w-4 h-4 text-teal-600" />
+                            </div>
+                            <div>
+                              <p className="text-gray-800 font-medium text-sm leading-relaxed">
+                                {template}
+                              </p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <Button
+                      onClick={handleGenerateDocument}
+                      disabled={!documentRequest.trim() || isGenerating}
+                      className="w-full bg-gradient-to-r from-teal-600 to-teal-700 hover:from-teal-700 hover:to-teal-800 text-white py-4 rounded-xl font-semibold text-base shadow-lg hover:shadow-xl transition-all duration-200 touch-manipulation"
+                    >
+                      {isGenerating ? (
+                        <div className="flex items-center space-x-3">
+                          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>Generating Your Document...</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center space-x-3">
+                          <Sparkles className="w-5 h-5" />
+                          <span>Generate Document</span>
+                        </div>
+                      )}
+                    </Button>
+
+                  </div>
+                </div>
+              )}
+
+              {showOutput && generatedText && (
+                <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+                  <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-4 sm:px-6 py-4 flex flex-col space-y-3 sm:space-y-0 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-6 h-6 sm:w-8 sm:h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                        <FileText className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg sm:text-xl font-bold text-white">
+                          Your Document is Ready!
+                        </h3>
+                        <p className="text-emerald-100 text-sm sm:text-base">
+                          Review your generated content below
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col space-y-2 sm:flex-row sm:space-y-0 sm:space-x-3">
+                      <Button
+                        onClick={handleEditRequest}
+                        variant="outline"
+                        className="border-teal-300 text-teal-100 hover:bg-teal-500 hover:border-white bg-transparent flex items-center justify-center space-x-2 text-sm sm:text-base h-12 touch-manipulation"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                        <span>Edit Request</span>
+                      </Button>
+                      <Button
+                        onClick={handleDownloadPDF}
+                        className="bg-white text-teal-700 hover:bg-gray-50 flex items-center justify-center space-x-2 font-semibold text-sm sm:text-base h-12 touch-manipulation"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>{`Download PDF - £${documentPrice}`}</span>
+                      </Button>
+                    </div>
+                  </div>
+                
+
+           <div className="p-4 sm:p-6">
+                    <div className="bg-gray-50 rounded-xl p-4 sm:p-6 max-h-[60vh] overflow-y-auto border border-gray-200">
+                      <div
+                        className="prose prose-sm sm:prose-lg max-w-none"
+                        dangerouslySetInnerHTML={{ __html: generatedText }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                )}
+            </TabsContent>
+
+            <TabsContent value="image" className="space-y-4">
+              <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+                <div className="bg-gradient-to-r from-indigo-600 to-teal-600 px-4 sm:px-6 py-4">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-6 h-6 sm:w-8 sm:h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                      <ImagePlus className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                    </div>
+                  <div>
+                      <h2 className="text-lg sm:text-xl font-bold text-white">
+                        AI Text to Image
+                      </h2>
+                      <p className="text-teal-100 text-sm sm:text-base">
+                        Describe an image and optionally add reference
+                        attachments.
+                      </p>
+                    </div>
+                 
+          
+                  </div>
+
+                   </div>
+
+                <div className="p-4 sm:p-6 space-y-5">
+                  {generatedImageUrl && (
+                    <div ref={generatedImageSectionRef} className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden p-4 sm:p-6">
+                      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+                        <h3 className="text-lg sm:text-xl font-bold text-gray-900">
+                          Generated Image
+                        </h3>
+                        {paidImageDownloadUrl ? (
+                          <Button
+                            variant="outline"
+                            className="border-teal-300 text-teal-700"
+                            onClick={() =>
+                              triggerImageDownload(paidImageDownloadUrl)
+                            }
+                          >
+                            <Download className="w-4 h-4 mr-2" /> Download
+                          </Button>
+                        ) : (
+                          <Button
+                            onClick={handleUnlockImageDownload}
+                            className="bg-teal-600 hover:bg-teal-700 text-white"
+                          >
+                            <Lock className="w-4 h-4 mr-2" />
+                            {`Unlock Download - £${documentPrice}`}
+                          </Button>
+                        )}
+                      </div>
+                      <div className="rounded-xl overflow-hidden border border-gray-200 bg-gray-50 relative">
+                        {!paidImageDownloadUrl && (
+                          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/45 backdrop-blur-[2px]">
+                            <div className="text-center text-white px-4">
+                              <Lock className="w-8 h-8 mx-auto mb-2" />
+                              <p className="font-semibold">Preview only</p>
+                              <p className="text-sm text-white/90">Complete payment to unlock full download access.</p>
+                            </div>
+                          </div>
+                        )}
+                        <img
+                          src={generatedImageUrl}
+                          alt="AI generated"
+                          className="w-full h-auto max-h-[70vh] object-contain"
+                          onContextMenu={(e) => {
+                            if (!paidImageDownloadUrl) {
+                              e.preventDefault();
+                            }
+                          }}
+                          draggable={Boolean(paidImageDownloadUrl)}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                   <label className="block text-base sm:text-lg font-semibold text-gray-900 mb-3">
+                      What image should AI create?
+                    </label>
+                    <Textarea
+                      value={imagePrompt}
+                      onChange={(e) => setImagePrompt(e.target.value)}
+                      placeholder="e.g., Cinematic product photo of a premium smartwatch on a wet black stone, dramatic lighting, ultra-detailed, 4k"
+                      className="min-h-24 resize-none text-sm sm:text-base border-2 border-gray-200 focus:border-teal-500 rounded-xl"
+                      disabled={isGeneratingImage}
+                    />
+                  </div>
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm sm:text-base font-semibold text-gray-900">
+                        Reference Attachments (optional)
+                      </h3>
+                      <span className="text-xs text-gray-500">
+                        Up to 4 images · max 5MB each
+                      </span>
+                    </div>
+                    <label className="flex cursor-pointer items-center justify-center border-2 border-dashed border-teal-200 rounded-xl p-4 text-sm text-teal-700 hover:bg-teal-50 transition-colors">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={handleImageAttachmentChange}
+                      />
+                      <div className="flex items-center gap-2">
+                        <Paperclip className="w-4 h-4" />
+                        <span>Add attachment images</span>
+                      </div>
+                    </label>
+
+                    {imageAttachments.length > 0 && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {imageAttachments.map((attachment) => (
+                          <div
+                            key={attachment.id}
+                            className="relative rounded-lg overflow-hidden border border-gray-200 bg-gray-100"
+                          >
+                            <img
+                              src={attachment.previewUrl}
+                              alt={attachment.file.name}
+                              className="w-full h-24 object-cover"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                removeImageAttachment(attachment.id)
+                              }
+                              className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-1 hover:bg-black/80"
+                              aria-label={`Remove ${attachment.file.name}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                   onClick={handleGenerateImage}
+                    disabled={!imagePrompt.trim() || isGeneratingImage}
+                    className="w-full bg-gradient-to-r from-indigo-600 to-teal-700 hover:from-indigo-700 hover:to-teal-800 text-white py-4 rounded-xl font-semibold text-base shadow-lg hover:shadow-xl transition-all duration-200"
+                  >
+                     {isGeneratingImage ? (
+                      <div className="flex items-center space-x-3">
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span>Generating Image...</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center space-x-3">
+                        <ImagePlus className="w-5 h-5" />
+                        <span>Generate Image</span>
+                      </div>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+            </TabsContent>
+          </Tabs>
+
+          <AuthDialog
+            isOpen={isAuthDialogOpen}
+            onClose={() => setIsAuthDialogOpen(false)}
+            title="Sign In to Generate Documents"
+            description="Sign in to your account to access our AI document generation service."
+            onSuccess={() => {
+              setIsAuthDialogOpen(false);
+              if (activeTab === "document") {
+                generateDocument();
+              } else {
+                generateImage();
+              }
+            }}
+            disableRedirect={true}
+          />
+
+          {/* Payment Popup */}
+          {showPaymentPopup && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className={`relative bg-white rounded-2xl p-4 sm:p-6 max-w-lg w-full shadow-2xl overflow-y-auto ${isSubmitting ? '' : 'max-h-[90vh]'}`}>
+                <div className="text-center mb-4 sm:mb-6">
+                  <div className="w-12 h-12 sm:w-16 sm:h-16 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                    <Download className="w-6 h-6 sm:w-8 sm:h-8 text-teal-600" />
+                  </div>
+                  <h3 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2">
+                    Complete Your Purchase
+                  </h3>
+                  <p className="text-sm sm:text-base text-gray-600">
+                    {activePurchaseType === "document"
+                      ? "Your document is ready! Complete your purchase to download the PDF."
+                      : "Your image is ready! Complete payment to unlock secure image download."}
+                  </p>
+                </div>
+
+                {paymentProvider === 'square' && settings?.square?.appId && settings?.square?.appLocationId ? (
+                    <PaymentForm
+                        applicationId={settings.square.appId}
+                        locationId={settings.square.appLocationId}
+                        cardTokenizeResponseReceived={async (token) => {
+                            handlePayment(token);
+                        }}
+                    >
+                        <div className="space-y-4 sm:space-y-6 mb-4 sm:mb-6">
+                            {/* Order Summary */}
+                            <div className="bg-gray-50 p-4 rounded-xl space-y-3">
+                                <div className="flex justify-between items-center text-sm sm:text-base">
+                                <span className="text-gray-700 font-medium">
+                                    AI Generated Document
+                                </span>
+                                <span className="font-semibold text-gray-900">
+                                    £{documentPrice.toFixed(2)}
+                                </span>
+                                </div>
+
+                                {appliedDiscount && !appliedDiscount.error && (
+                                <div className="flex justify-between items-center text-green-600 text-xs sm:text-sm">
+                                    <span>Discount ({appliedDiscount.promoCode})</span>
+                                    <span>-£{getDiscountAmount().toFixed(2)}</span>
+                                </div>
+                                )}
+
+                                <div className="border-t pt-3 mt-3">
+                                  <div className="flex justify-between items-center font-bold text-base sm:text-lg">
+                                      <span className="text-gray-900">Total</span>
+                                      <span className="text-teal-600">
+                                      £{finalPrice.toFixed(2)}
+                                      </span>
+                                  </div>
+                                </div>
+                            </div>
+
+                            {/* Discount Code Section */}
+                            <div className="space-y-3">
+                                <label className="block text-sm font-medium text-gray-700">
+                                Discount Code
+                                </label>
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                <div className="flex-1 relative">
+                                    <Tag className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                    <Input
+                                    type="text"
+                                    value={discountCode}
+                                    onChange={(e) => setDiscountCode(e.target.value)}
+                                    placeholder="Enter discount code"
+                                    className="pl-10 h-12 text-sm sm:text-base text-gray-900"
+                                    disabled={appliedDiscount && !appliedDiscount.error}
+                                    />
+                                </div>
+                                {appliedDiscount && !appliedDiscount.error ? (
+                                    <Button
+                                    onClick={removeDiscount}
+                                    variant="outline"
+                                    className="text-red-600 border-red-300 h-12 text-sm sm:text-base touch-manipulation"
+                                    >
+                                    Remove
+                                    </Button>
+                                ) : (
+                                    <Button
+                                    onClick={applyDiscountCode}
+                                    variant="outline"
+                                    disabled={!discountCode.trim() || isApplyingDiscount}
+                                    className="h-12 text-sm sm:text-base touch-manipulation"
+                                    >
+                                    {isApplyingDiscount ? (
+                                        <div className="flex items-center space-x-2">
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            <span>Applying...</span>
+                                        </div>
+                                    ) : (
+                                        <span>Apply</span>
+                                    )}
+                                    </Button>
+                                )}
+                                </div>
+
+                                {appliedDiscount?.error && (
+                                <p className="text-xs text-red-600">
+                                    {appliedDiscount.error}
+                                </p>
+                                )}
+
+                                {appliedDiscount && !appliedDiscount.error && (
+                                <p className="text-xs text-green-600">
+                                    ✓ Discount applied successfully!
+                                </p>
+                                )}
+                            </div>
+
+                            <div
+                                className="border border-gray-200 rounded-xl p-4"
+                                onClick={() => {
+                                    setIsSubmitting(true);
+                                }}
+                            >                               <SquareCreditCard />
+                            </div>
+                        </div>
+                        <div className="flex flex-col space-y-3 sm:flex-row sm:space-y-0 sm:space-x-4">
+                            <Button
+                                onClick={() => setShowPaymentPopup(false)}
+                                variant="outline"
+                                className="flex-1 h-12 text-sm sm:text-base touch-manipulation"
+                            >
+                                Cancel
+                            </Button>
+                        </div>
+                    </PaymentForm>
+                ) : (
+                    <>
+                        <div className="space-y-4 sm:space-y-6 mb-4 sm:mb-6">
+                            {/* Order Summary */}
+                            <div className="bg-gray-50 p-4 rounded-xl space-y-3">
+                                <div className="flex justify-between items-center text-sm sm:text-base">
+                                <span className="text-gray-700 font-medium">
+                                    AI Generated Document
+                                </span>
+                                <span className="font-semibold text-gray-900">
+                                    £{documentPrice.toFixed(2)}
+                                </span>
+                                </div>
+
+                                {appliedDiscount && !appliedDiscount.error && (
+                                <div className="flex justify-between items-center text-green-600 text-xs sm:text-sm">
+                                    <span>Discount ({appliedDiscount.promoCode})</span>
+                                    <span>-£{getDiscountAmount().toFixed(2)}</span>
+                                </div>
+                                )}
+
+                                <div className="border-t pt-3 mt-3">
+                                <div className="flex justify-between items-center font-bold text-base sm:text-lg">
+                                    <span className="text-gray-900">Total</span>
+                                    <span className="text-teal-600">
+                                    £{finalPrice.toFixed(2)}
+                                    </span>
+                                </div>
+                                </div>
+                            </div>                            
+
+                            {/* Discount Code Section */}
+                            <div className="space-y-3">
+                                <label className="block text-sm font-medium text-gray-700">
+                                Discount Code
+                                </label>
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                <div className="flex-1 relative">
+                                    <Tag className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                    <Input
+                                    type="text"
+                                    value={discountCode}
+                                    onChange={(e) => setDiscountCode(e.target.value)}
+                                    placeholder="Enter discount code"
+                                    className="pl-10 h-12 text-sm sm:text-base text-gray-900"
+                                    disabled={appliedDiscount && !appliedDiscount.error}
+                                    />
+                                </div>
+                                {appliedDiscount && !appliedDiscount.error ? (
+                                    <Button
+                                    onClick={removeDiscount}
+                                    variant="outline"
+                                    className="text-red-600 border-red-300 h-12 text-sm sm:text-base touch-manipulation"
+                                    >
+                                    Remove
+                                    </Button>
+                                ) : (
+                                    <Button
+                                    onClick={applyDiscountCode}
+                                    variant="outline"
+                                    disabled={!discountCode.trim() || isApplyingDiscount}
+                                    className="h-12 text-sm sm:text-base touch-manipulation"
+                                    >
+                                    {isApplyingDiscount ? (
+                                        <div className="flex items-center space-x-2">
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            <span>Applying...</span>
+                                        </div>
+                                    ) : (
+                                        <span>Apply</span>
+                                    )}
+                                    </Button>
+                                )}
+                                </div>
+
+                                {appliedDiscount?.error && (
+                                <p className="text-xs text-red-600">
+                                    {appliedDiscount.error}
+                                </p>
+                                )}
+
+                                {appliedDiscount && !appliedDiscount.error && (
+                                <p className="text-xs text-green-600">
+                                    ✓ Discount applied successfully!
+                                </p>
+                                )}
+                            </div>
+
+                            {paymentProvider === "stripe" && (
+                              <StripePayment
+                                ref={stripePaymentRef}
+                                docData={
+                                  activePurchaseType === "document"
+                                    ? {
+                                        prompt: documentRequest,
+                                        content: generatedText,
+                                        price: documentPrice,
+                                      }
+                                    : {
+                                        prompt: `AI image: ${imagePrompt}`,
+                                        content: generatedImageUrl,
+                                        price: documentPrice,
+                                      }
+                                }
+                                user={user}
+                                discount={appliedDiscount ? getDiscountAmount() : 0}
+                                finalPrice={finalPrice}
+                                onProcessingChange={setIsSubmitting}
+                                onPaymentSuccess={(documentUuid, content) =>
+                                  handlePaidContent(documentUuid, content)
+                                }
+                              />
+                            )}
+
+                            {paymentProvider === "airwallex" && (
+                                <div
+                                id="airwallex-card-element"
+                                ref={airwallexCardRef}
+                                className="border border-gray-200 rounded-xl p-4"
+                                ></div>
+                            )}
+                        </div>
+                        <div className="flex flex-col space-y-3 sm:flex-row sm:space-y-0 sm:space-x-4">
+                            <Button
+                                onClick={() => setShowPaymentPopup(false)}
+                                variant="outline"
+                                className="flex-1 h-12 text-sm sm:text-base touch-manipulation"
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={onPayClick}
+                                disabled={isSubmitting || isPaddleLoading}
+                                className="flex-1 bg-teal-600 hover:bg-teal-700 text-white h-12 text-sm sm:text-base font-semibold touch-manipulation"
+                            >
+                                {isSubmitting || isPaddleLoading
+                                ? "Processing..."
+                                : `Pay £${finalPrice.toFixed(2)}`}
+                            </Button>
+                        </div>
+                    </>
+                )}
+                {isSubmitting && (
+                  <div className="absolute inset-0 bg-white bg-opacity-80 backdrop-blur-sm flex flex-col items-center justify-center rounded-2xl" style={{ zIndex: 999, minHeight: '100%' }}>
+                    <Loader2 className="h-10 w-10 animate-spin text-teal-600" />
+                    <p className="mt-4 text-lg font-semibold text-gray-700">Processing Payment...</p>
+                    <p className="text-sm text-gray-500">Please do not close this window.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export default function AIDocumentsPageWrapper() {
+  const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
+  const settings = useSettings();
+  const paymentProvider = settings?.paymentProvider?.activeProcessor;
+
+  useEffect(() => {
+    if (paymentProvider === 'stripe' && process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY) {
+      setStripePromise(loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY));
+    }
+  }, [paymentProvider, settings]);
+
+  if (!settings) { // Check if settings are loaded
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-teal-600" />
+      </div>
+    );
+  }
+
+  if (paymentProvider === 'stripe') {
+    if (stripePromise) {
+        return (
+          <Elements stripe={stripePromise}>
+            <AIDocumentsPage paymentProvider={paymentProvider} />
+          </Elements>
+        );
+    } else {
+        return (
+            <div className="flex h-screen items-center justify-center">
+                <div className="text-center p-4">
+                    <AlertCircle className="h-8 w-8 text-red-500 mx-auto" />
+                    <h2 className="mt-2 text-xl font-bold">Payment Gateway Error</h2>
+                    <p className="mt-1 text-gray-600">Could not initialize the payment provider. Please contact support.</p>
+                </div>
+            </div>
+        )
+    }
+  }
+
+  return <AIDocumentsPage paymentProvider={paymentProvider} />;
+}
