@@ -1,29 +1,15 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import { useSettings } from "@/context/settings"
 import { Footer } from "@/components/footer"
 import { Header } from "@/components/header"
 import { FileText } from "lucide-react"
-import { RegionSwitcher, type Region } from "@/components/legal/region-switcher"
 import TosUK from "@/components/legal/tos-uk"
 import TosUAE from "@/components/legal/tos-uae"
 
 export default function TermsOfServicesPage() {
-  const [region, setRegion] = useState<Region>("UK")
   const settings = useSettings()
-
-  useEffect(() => {
-    const savedRegion = localStorage.getItem("legal_region") as Region
-    if (savedRegion === "UK" || savedRegion === "UAE") {
-      setRegion(savedRegion)
-    }
-  }, [])
-
-  const handleRegionChange = (newRegion: Region) => {
-    setRegion(newRegion)
-    localStorage.setItem("legal_region", newRegion)
-  }
+  const isUae = settings?.general?.activeJurisdiction === "uae"
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-teal-50 to-gray-100 flex flex-col relative overflow-hidden">
@@ -92,11 +78,8 @@ export default function TermsOfServicesPage() {
             </div>
           </div>
 
-          {/* Region Switcher */}
-          <RegionSwitcher currentRegion={region} onChange={handleRegionChange} />
-
-          {/* Content Sections based on selected Region */}
-          {region === "UK" ? <TosUK /> : <TosUAE />}
+          {/* Content Sections based on admin's active jurisdiction */}
+          {isUae ? <TosUAE /> : <TosUK />}
         </div>
       </main>
 

@@ -25,7 +25,7 @@ export default function ReturnUAE() {
             This policy sets out the return, exchange and refund terms for {settings?.general?.siteName || 'Tempnow'}'s digital document services, disclosed to you before you complete your purchase as required by consumer protection and electronic commerce law.
           </p>
           <p className="text-gray-700 leading-relaxed">
-            The supplier of these services, and the party responsible for handling returns and refunds, is SBR Digital, the licensed entity trading as {settings?.general?.siteName || 'Tempnow'}. Our licence details and registered address are available on request. This policy forms part of our <Link className="font-medium text-primary underline hover:text-primary/80 transition" href="/terms">Terms of Service</Link>.
+            The supplier of these services, and the party responsible for handling returns and refunds, is {settings?.general?.companyName || 'SBR Digital'}, the licensed entity trading as {settings?.general?.siteName || 'Tempnow'}. Our licence details and registered address are available on request. This policy forms part of our <Link className="font-medium text-primary underline hover:text-primary/80 transition" href="/terms">Terms of Service</Link>.
           </p>
           <p className="mt-3 text-gray-700 leading-relaxed">
             Nothing in this policy removes or limits the statutory rights the law gives you as a consumer. Where any term of this policy conflicts with those rights, your statutory rights prevail.

@@ -43,8 +43,16 @@ export async function updateUser(userId: string, updates: Partial<User>): Promis
 export async function getSettings(param: string): Promise<any | null> {
   noStore();
   const [setting] = await db.select().from(settings).where(eq(settings.param, param))
-  if (setting && setting.value) {
-    return JSON.parse(setting.value)
+  if (setting && setting.value !== null && setting.value !== undefined) {
+    if (typeof setting.value === 'object') return setting.value;
+    if (typeof setting.value === 'string') {
+      try {
+        return JSON.parse(setting.value)
+      } catch (e) {
+        return setting.value
+      }
+    }
+    return setting.value;
   }
   return null
 }
@@ -56,8 +64,18 @@ export async function getAllSettings(): Promise<any | null> {
 
   const settingsObject: { [key: string]: any } = {};
   for (const setting of allSettings) {
-    if (setting.param && setting.value) {
-      settingsObject[setting.param] = JSON.parse(setting.value);
+    if (setting.param && setting.value !== null && setting.value !== undefined) {
+      if (typeof setting.value === 'object') {
+        settingsObject[setting.param] = setting.value;
+      } else if (typeof setting.value === 'string') {
+        try {
+          settingsObject[setting.param] = JSON.parse(setting.value);
+        } catch (e) {
+          settingsObject[setting.param] = setting.value;
+        }
+      } else {
+        settingsObject[setting.param] = setting.value;
+      }
     }
   }
   return settingsObject;

@@ -63,13 +63,22 @@ async function getMotAccessToken(): Promise<string> {
     datetime: new Date().toISOString(),
   };
 
-  await db
-    .insert(settings)
-    .values({ param: 'mot_token', value: JSON.stringify(newTokenToStore) })
-    .onConflictDoUpdate({
-      target: settings.param,
-      set: { value: JSON.stringify(newTokenToStore) },
-    });
+  const existingToken = await db
+    .select()
+    .from(settings)
+    .where(eq(settings.param, 'mot_token'))
+    .limit(1);
+
+  if (existingToken.length > 0) {
+    await db
+      .update(settings)
+      .set({ value: JSON.stringify(newTokenToStore) })
+      .where(eq(settings.param, 'mot_token'));
+  } else {
+    await db
+      .insert(settings)
+      .values({ param: 'mot_token', value: JSON.stringify(newTokenToStore) });
+  }
 
   return accessToken;
 }
@@ -100,7 +109,7 @@ export async function POST(request: Request) {
       if (!apiKey) {
         throw new Error("MOT_API_KEY is not configured in environment variables.");
       }
-      
+
       const accessToken = await getMotAccessToken();
       const apiUrl = `https://history.mot.api.gov.uk/v1/trade/vehicles/registration/${encodeURIComponent(cleanReg)}`;
 
@@ -120,7 +129,7 @@ export async function POST(request: Request) {
 
       const data = await apiResponse.json();
 
-      
+
       carDetails = {
         registration: data.registration,
         make: data.make,
@@ -133,7 +142,7 @@ export async function POST(request: Request) {
     } else {
       // --- Logic for Dayinsure API (default) ---
       const apiUrl = `https://web-api.dayinsure.com/api/v1/vehicle/${cleanReg}`;
-      
+
       const apiResponse = await fetch(apiUrl, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },

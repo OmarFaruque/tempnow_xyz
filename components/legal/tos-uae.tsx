@@ -21,7 +21,7 @@ export default function TosUAE() {
         </div>
         <div className="p-6 space-y-4">
           <p className="text-gray-800 leading-relaxed">
-            This website operates under the name {settings?.general?.siteName || 'Tempnow'}. The services are supplied to you by SBR Digital, the licensed entity trading under that name, and your contract is with SBR Digital. Our licence details and registered address are available on request.
+            This website operates under the name {settings?.general?.siteName || 'Tempnow'}. The services are supplied to you by {settings?.general?.companyName || 'SBR Digital'}, the licensed entity trading under that name, and your contract is with {settings?.general?.companyName || 'SBR Digital'}. Our licence details and registered address are available on request.
           </p>
           <p className="text-gray-700 text-sm leading-relaxed">
             By placing an order you accept these terms. Acceptance given by electronic means has the same legal effect as a signature, and the electronic records of your order and payment are valid evidence of the contract between us.

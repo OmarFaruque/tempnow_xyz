@@ -21,7 +21,8 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
-  const generalSettings = await getSettings("general")
+  const generalSettings = (await getSettings("general")) || {}
+  const generalUaeSettings = (await getSettings("general_uae")) || {}
   const openaiSettings = await getSettings("openai")
   const bankSettings = await getSettings("bank")
   const stripeSettings = await getSettings("stripe")
@@ -31,11 +32,28 @@ export default async function RootLayout({
   const paymentSettings = await getSettings("payment")
   const certificateTemplate = await getSettings("certificateTemplate")
 
+  const activeJurisdiction = generalSettings?.activeJurisdiction || "uk"
+
+  // Merge UAE settings over UK settings if active jurisdiction is UAE
+  const activeGeneralSettings = { ...generalSettings }
+  if (activeJurisdiction === "uae") {
+    for (const key of Object.keys(generalUaeSettings)) {
+      if (
+        generalUaeSettings[key] !== undefined &&
+        generalUaeSettings[key] !== null &&
+        generalUaeSettings[key] !== ""
+      ) {
+        activeGeneralSettings[key] = generalUaeSettings[key]
+      }
+    }
+  }
+  activeGeneralSettings.siteName = activeGeneralSettings.siteName || "TEMPNOW"
+  activeGeneralSettings.activeJurisdiction = activeJurisdiction
+
   const settings = {
-    general: {
-      ...generalSettings,
-      siteName: generalSettings?.siteName || "TEMPNOW", // Ensure siteName is always present
-    },
+    general: activeGeneralSettings,
+    general_uk: generalSettings,
+    general_uae: generalUaeSettings,
     openai: openaiSettings,
     bank: bankSettings,
     stripe: stripeSettings,
@@ -49,8 +67,8 @@ export default async function RootLayout({
   return (
     <html lang="en">
       <head>
-        {generalSettings.favicon && (
-          <link rel="icon" href={generalSettings.favicon} />
+        {activeGeneralSettings.favicon && (
+          <link rel="icon" href={activeGeneralSettings.favicon} />
         )}
         <script
           dangerouslySetInnerHTML={{

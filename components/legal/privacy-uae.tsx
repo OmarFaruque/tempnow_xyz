@@ -21,7 +21,7 @@ export default function PrivacyUAE() {
         </div>
         <div className="p-6 space-y-4">
           <p className="text-gray-700 leading-relaxed">
-            This website is operated under the name {settings?.general?.siteName || 'Tempnow'} by SBR Digital, which is the controller of the personal data described in this policy. Our licence details and registered address are available on request.
+            This website is operated under the name {settings?.general?.siteName || 'Tempnow'} by {settings?.general?.companyName || 'SBR Digital'}, which is the controller of the personal data described in this policy. Our licence details and registered address are available on request.
           </p>
           <p className="text-gray-700 leading-relaxed">
             This policy explains what personal data we collect, why we collect it, who we share it with and the rights you hold over it. It forms part of our <Link className="underline hover:no-underline text-primary hover:text-primary/80 transition" href="/terms-of-service">Terms of Service</Link>.

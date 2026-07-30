@@ -5,27 +5,43 @@ import { settings as settingsTable } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET(request: NextRequest) {
   try {
     const settingsFromDb = await db.select().from(settingsTable);
 
     const settings = settingsFromDb.reduce((acc, setting) => {
       try {
-        // The value is stored as a JSON string, so we need to parse it.
-        // Make sure to handle cases where parsing might fail.
-        acc[setting.param] = setting.value ? JSON.parse(setting.value) : {};
+        if (setting.value === null || setting.value === undefined) {
+          acc[setting.param] = {};
+        } else if (typeof setting.value === 'object') {
+          acc[setting.param] = setting.value;
+        } else if (typeof setting.value === 'string') {
+          acc[setting.param] = JSON.parse(setting.value);
+        } else {
+          acc[setting.param] = setting.value;
+        }
       } catch (e) {
-        console.error(`Failed to parse setting value for param: ${setting.param}`, e);
-        // Assign a default or empty object if parsing fails
         acc[setting.param] = {};
       }
       return acc;
     }, {} as { [key: string]: any });
 
-    return NextResponse.json({
-      success: true,
-      settings: settings,
-    });
+
+
+    return NextResponse.json(
+      {
+        success: true,
+        settings: settings,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        },
+      }
+    );
   } catch (error) {
     console.error("Error fetching settings:", error);
     return NextResponse.json(
@@ -47,17 +63,28 @@ export async function POST(request: NextRequest) {
     }
 
     // Use a transaction to ensure all settings are saved or none are.
+    // Note: Using select-then-update/insert because the DB table may lack
+    // a UNIQUE constraint on "param" (needed for ON CONFLICT DO UPDATE).
     await db.transaction(async (tx) => {
       for (const key in settings) {
         if (Object.prototype.hasOwnProperty.call(settings, key)) {
           const value = JSON.stringify(settings[key]);
-          await tx
-            .insert(settingsTable)
-            .values({ param: key, value: value })
-            .onConflictDoUpdate({
-              target: settingsTable.param,
-              set: { value: value },
-            });
+          const existing = await tx
+            .select()
+            .from(settingsTable)
+            .where(eq(settingsTable.param, key))
+            .limit(1);
+
+          if (existing.length > 0) {
+            await tx
+              .update(settingsTable)
+              .set({ value: value })
+              .where(eq(settingsTable.param, key));
+          } else {
+            await tx
+              .insert(settingsTable)
+              .values({ param: key, value: value });
+          }
         }
       }
     });

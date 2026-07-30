@@ -439,9 +439,8 @@ The Tempnow Team`,
               {Object.keys(templates).map((templateKey) => (
                 <Card
                   key={templateKey}
-                  className={`cursor-pointer transition-colors ${
-                    activeTemplate === templateKey ? "ring-2 ring-blue-500 bg-blue-50" : "hover:bg-gray-50"
-                  }`}
+                  className={`cursor-pointer transition-colors ${activeTemplate === templateKey ? "ring-2 ring-blue-500 bg-blue-50" : "hover:bg-gray-50"
+                    }`}
                   onClick={() => setActiveTemplate(templateKey)}
                 >
                   <CardContent className="p-4">
@@ -708,6 +707,7 @@ export function SettingsSection() {
       allowedDomains: ["monzic.co.uk"],
     },
     general: {
+      activeJurisdiction: "uk",
       logo: "",
       siteName: "MONZIC",
       supportEmail: "support@tempnow.uk",
@@ -715,8 +715,8 @@ export function SettingsSection() {
       timezone: "Europe/London",
       currency: "GBP",
       policyScheduleVisible: true,
-      productInformationVisible:false,
-      statementOfFactVisible:false,
+      productInformationVisible: false,
+      statementOfFactVisible: false,
       carSearchApiProvider: "dayinsure",
       siteDomain: "",
       companyName: "",
@@ -727,6 +727,29 @@ export function SettingsSection() {
       redirectUrl: "",
       activeRedirection: "0",
       checkoutCheckboxContent: "",
+      favicon: "",
+    },
+    general_uae: {
+      logo: "",
+      siteName: "MONZIC UAE",
+      supportEmail: "support@tempnow.ae",
+      adminEmail: "admin@tempnow.ae",
+      timezone: "Asia/Dubai",
+      currency: "AED",
+      policyScheduleVisible: true,
+      productInformationVisible: false,
+      statementOfFactVisible: false,
+      carSearchApiProvider: "dayinsure",
+      siteDomain: "",
+      companyName: "",
+      companyRegistration: "",
+      effectiveDate: "",
+      aliases: "",
+      businessActivity: "",
+      redirectUrl: "",
+      activeRedirection: "0",
+      checkoutCheckboxContent: "",
+      favicon: "",
     },
     bank: {
       show: false,
@@ -1034,7 +1057,9 @@ export function SettingsSection() {
     setError(null)
 
     try {
-      const response = await fetch("/api/admin/settings")
+      const response = await fetch("/api/admin/settings", {
+        cache: "no-store",
+      })
 
       if (!response.ok) {
         throw new Error(`Server responded with ${response.status}: ${await response.text()}`)
@@ -1073,6 +1098,18 @@ export function SettingsSection() {
             newSettings.policyScheduleTemplate = {
               ...prevSettings.policyScheduleTemplate,
               ...result.settings.policyScheduleTemplate,
+            };
+          }
+          if (result.settings.general_uae) {
+            newSettings.general_uae = {
+              ...prevSettings.general_uae,
+              ...result.settings.general_uae,
+            };
+          }
+          if (result.settings.general) {
+            newSettings.general = {
+              ...prevSettings.general,
+              ...result.settings.general,
             };
           }
           return newSettings;
@@ -1126,6 +1163,10 @@ export function SettingsSection() {
   const [uploadingFavicon, setUploadingFavicon] = useState(false);
   const [faviconUploadError, setFaviconUploadError] = useState<string | null>(null);
   const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
+  const [uploadingLogoUae, setUploadingLogoUae] = useState(false);
+  const [uploadingFaviconUae, setUploadingFaviconUae] = useState(false);
+  const [faviconUploadErrorUae, setFaviconUploadErrorUae] = useState<string | null>(null);
+  const [logoUploadErrorUae, setLogoUploadErrorUae] = useState<string | null>(null);
 
   const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1187,13 +1228,76 @@ export function SettingsSection() {
     }
   };
 
+  const handleLogoUploadUae = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploadingLogoUae(true);
+    setLogoUploadErrorUae(null);
+
+    try {
+      const response = await fetch(`/api/admin/upload-logo?filename=${file.name}`, {
+        method: "POST",
+        body: file,
+      });
+
+      if (!response.ok) {
+        throw new Error("Logo upload failed");
+      }
+
+      const result = await response.json();
+      if (result.url) {
+        updateSetting("general_uae", "logo", result.url);
+      } else {
+        throw new Error(result.error || "Unknown error during upload");
+      }
+    } catch (error) {
+      setLogoUploadErrorUae(error instanceof Error ? error.message : "An unexpected error occurred.");
+    } finally {
+      setUploadingLogoUae(false);
+    }
+  };
+
+  const handleFaviconUploadUae = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploadingFaviconUae(true);
+    setFaviconUploadErrorUae(null);
+
+    try {
+      const response = await fetch(`/api/admin/upload-logo?filename=${file.name}`, {
+        method: "POST",
+        body: file,
+      });
+
+      if (!response.ok) {
+        throw new Error("Favicon upload failed");
+      }
+
+      const result = await response.json();
+      if (result.url) {
+        updateSetting("general_uae", "favicon", result.url);
+      } else {
+        throw new Error(result.error || "Unknown error during upload");
+      }
+    } catch (error) {
+      setFaviconUploadErrorUae(error instanceof Error ? error.message : "An unexpected error occurred.");
+    } finally {
+      setUploadingFaviconUae(false);
+    }
+  };
+
   const updateSquarePaymentMethod = (method: 'card' | 'googlePay' | 'applePay', checked: boolean) => {
     setSettings((prev) => ({
       ...prev,
       square: {
         ...prev.square,
         paymentMethods: {
-          ...prev.square.paymentMethods,
+          card: true,
+          googlePay: false,
+          applePay: false,
+          ...(prev.square?.paymentMethods || {}),
           [method]: checked,
         },
       },
@@ -1270,6 +1374,7 @@ export function SettingsSection() {
 
       if (result.success) {
         setHasChanges(false)
+        await loadSettings()
         setTestResults((prev) => ({
           ...prev,
           save: {
@@ -1331,15 +1436,15 @@ export function SettingsSection() {
           </Button>
           <Button onClick={saveSettings} disabled={!hasChanges || isSaving} className="bg-teal-600 hover:bg-teal-700">
             {isSaving ? (
-                <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                    Saving...
-                </>
+              <>
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                Saving...
+              </>
             ) : (
-                <>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save All Changes
-                </>
+              <>
+                <Save className="h-4 w-4 mr-2" />
+                Save All Changes
+              </>
             )}
           </Button>
         </div>
@@ -1634,7 +1739,7 @@ export function SettingsSection() {
                     </SelectItem>
                   </SelectContent>
                 </Select>
-                <br/>
+                <br />
               </div>
               <div className="mt-2"><small className="text-xs text-gray-500"><i>Webhook URL: {process.env.NEXT_PUBLIC_BASE_URL}/api/stripe-webhook</i></small></div>
 
@@ -1918,15 +2023,15 @@ export function SettingsSection() {
                 <Label>Square Payment Methods</Label>
                 <div className="mt-2 space-y-2 rounded-md border p-4">
                   <div className="flex items-center space-x-2">
-                    <Checkbox id="square-card" checked={settings.square.paymentMethods.card} onCheckedChange={(checked) => updateSquarePaymentMethod('card', !!checked)} />
+                    <Checkbox id="square-card" checked={settings.square?.paymentMethods?.card ?? true} onCheckedChange={(checked) => updateSquarePaymentMethod('card', !!checked)} />
                     <Label htmlFor="square-card">Card Payment</Label>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <Checkbox id="square-google" checked={settings.square.paymentMethods.googlePay} onCheckedChange={(checked) => updateSquarePaymentMethod('googlePay', !!checked)} />
+                    <Checkbox id="square-google" checked={settings.square?.paymentMethods?.googlePay ?? false} onCheckedChange={(checked) => updateSquarePaymentMethod('googlePay', !!checked)} />
                     <Label htmlFor="square-google">Google Pay</Label>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <Checkbox id="square-apple" checked={settings.square.paymentMethods.applePay} onCheckedChange={(checked) => updateSquarePaymentMethod('applePay', !!checked)} />
+                    <Checkbox id="square-apple" checked={settings.square?.paymentMethods?.applePay ?? false} onCheckedChange={(checked) => updateSquarePaymentMethod('applePay', !!checked)} />
                     <Label htmlFor="square-apple">Apple Pay</Label>
                   </div>
                 </div>
@@ -2537,7 +2642,7 @@ export function SettingsSection() {
           </Card>
         </TabsContent>
 
-         <TabsContent value="ai" className="space-y-6">
+        <TabsContent value="ai" className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -2626,7 +2731,7 @@ export function SettingsSection() {
             </CardContent>
           </Card>
         </TabsContent>
-                
+
         <TabsContent value="email" className="space-y-6">
           <Card>
             <CardHeader>
@@ -2761,201 +2866,442 @@ export function SettingsSection() {
                 <Key className="h-5 w-5 text-gray-600" />
                 General Settings
               </CardTitle>
-              <CardDescription>Configure general application settings</CardDescription>
+              <CardDescription>Configure general application settings for UK and UAE (Dubai)</CardDescription>
             </CardHeader>
             <CardContent className="space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <Label htmlFor="site-name">Site Name</Label>
-                  <Input
-                    id="site-name"
-                    value={settings.general.siteName}
-                    onChange={(e) => updateSetting("general", "siteName", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="currency">Currency</Label>
-                  <Select
-                    value={settings.general.currency}
-                    onValueChange={(value) => updateSetting("general", "currency", value)}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="GBP">GBP (£)</SelectItem>
-                      <SelectItem value="USD">USD ($)</SelectItem>
-                      <SelectItem value="EUR">EUR (€)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="support-email">Support Email</Label>
-                  <Input
-                    id="support-email"
-                    type="email"
-                    value={settings.general.supportEmail}
-                    onChange={(e) => updateSetting("general", "supportEmail", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="admin-email">Admin Email</Label>
-                  <Input
-                    id="admin-email"
-                    type="email"
-                    value={settings.general.adminEmail}
-                    onChange={(e) => updateSetting("general", "adminEmail", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="site-domain">Site domain</Label>
-                  <Input
-                    id="site-domain"
-                    type="text"
-                    value={settings.general.siteDomain}
-                    onChange={(e) => updateSetting("general", "siteDomain", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="company-name">Company Name</Label>
-                  <Input
-                    id="company-name"
-                    type="text"
-                    value={settings.general.companyName}
-                    onChange={(e) => updateSetting("general", "companyName", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="company-registration">Company Registration</Label>
-                  <Input
-                    id="company-registration"
-                    type="text"
-                    value={settings.general.companyRegistration}
-                    onChange={(e) => updateSetting("general", "companyRegistration", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="effective-date">Effective Date</Label>
-                  <Input
-                    id="effective-date"
-                    type="date"
-                    value={settings.general.effectiveDate}
-                    onChange={(e) => updateSetting("general", "effectiveDate", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="aliases">Aliases</Label>
-                  <Input
-                    id="aliases"
-                    type="text"
-                    value={settings.general.aliases}
-                    onChange={(e) => updateSetting("general", "aliases", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="businessActivity">Business Activity</Label>
-                  <Input
-                    id="businessActivity"
-                    type="text"
-                    value={settings.general.businessActivity}
-                    onChange={(e) => updateSetting("general", "businessActivity", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="redirectUrl">Redirect URL</Label>
-                  <Input
-                    id="redirectUrl"
-                    type="url"
-                    value={settings.general?.redirectUrl}
-                    onChange={(e) => updateSetting("general", "redirectUrl", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="activeRedirection">Active Redirection</Label>
-                  <Select
-                    value={settings.general?.activeRedirection}
-                    onValueChange={(value) => updateSetting("general", "activeRedirection", value)}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">Yes</SelectItem>
-                      <SelectItem value="0">No</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="checkout-checkbox-content">Checkout Checkbox Content</Label>
-                  <Textarea
-                    id="checkout-checkbox-content"
-                    value={settings.general.checkoutCheckboxContent}
-                    onChange={(e) => updateSetting("general", "checkoutCheckboxContent", e.target.value)}
-                    placeholder="Enter checkbox content. Separate multiple checkboxes with ||"
-                    rows={4}
-                  />
-                  <p className="text-xs text-gray-500">
-                    Use || to separate multiple checkboxes. You can use HTML for links, e.g., &lt;a href="/terms"&gt;Terms&lt;/a&gt;.
+              {/* Active Jurisdiction Selector */}
+              <div className="p-4 bg-teal-50 border border-teal-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="active-jurisdiction" className="text-base font-semibold text-teal-900">
+                    Active Jurisdiction
+                  </Label>
+                  <p className="text-xs text-teal-700 mt-0.5">
+                    Select which jurisdiction's legal documents (Privacy Policy, Terms of Service, Return Policy) are active on the website.
                   </p>
                 </div>
+                <Select
+                  value={settings.general.activeJurisdiction || "uk"}
+                  onValueChange={(value) => updateSetting("general", "activeJurisdiction", value)}
+                >
+                  <SelectTrigger id="active-jurisdiction" className="w-48 bg-white border-teal-300 font-medium">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="uk">UK (United Kingdom)</SelectItem>
+                    <SelectItem value="uae">UAE (Dubai)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t">
-                <div className="space-y-2">
-                    <Label>Site Logo</Label>
-                    <div className="flex items-center gap-4 rounded-lg border p-4">
-                      <div className="w-24 h-24 rounded-md flex items-center justify-center bg-gray-50 overflow-hidden">
-                        {settings.general.logo ? (
-                          <img src={settings.general.logo} alt="Logo Preview" className="h-full w-full object-contain" />
-                        ) : (
-                          <span className="text-xs text-gray-500">No Logo</span>
-                        )}
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <Input
-                          id="logo-upload"
-                          type="file"
-                          accept="image/png, image/jpeg, image/svg+xml"
-                          onChange={handleLogoUpload}
-                          className="hidden"
-                        />
-                        <Button asChild variant="outline">
-                          <label htmlFor="logo-upload" className="cursor-pointer w-full flex items-center justify-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                            </svg>
-                            {uploadingLogo ? "Uploading..." : "Upload Logo"}
-                          </label>
-                        </Button>
-                        <p className="text-xs text-gray-500">PNG, JPG, SVG. Max 2MB.</p>
-                        {logoUploadError && <p className="text-sm text-red-500 mt-1">{logoUploadError}</p>}
+              {/* Sub-tabs for UK vs UAE values */}
+              <Tabs defaultValue="uk" className="space-y-6">
+                <TabsList className="grid w-full grid-cols-2 max-w-md">
+                  <TabsTrigger value="uk" className="font-semibold">UK Settings</TabsTrigger>
+                  <TabsTrigger value="uae" className="font-semibold">UAE (Dubai) Settings</TabsTrigger>
+                </TabsList>
+
+                {/* UK Tab Content */}
+                <TabsContent value="uk" className="space-y-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <Label htmlFor="site-name">Site Name</Label>
+                      <Input
+                        id="site-name"
+                        value={settings.general.siteName}
+                        onChange={(e) => updateSetting("general", "siteName", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="currency">Currency</Label>
+                      <Select
+                        value={settings.general.currency}
+                        onValueChange={(value) => updateSetting("general", "currency", value)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="GBP">GBP (£)</SelectItem>
+                          <SelectItem value="USD">USD ($)</SelectItem>
+                          <SelectItem value="EUR">EUR (€)</SelectItem>
+                          <SelectItem value="AED">AED (د.إ)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="support-email">Support Email</Label>
+                      <Input
+                        id="support-email"
+                        type="email"
+                        value={settings.general.supportEmail}
+                        onChange={(e) => updateSetting("general", "supportEmail", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="admin-email">Admin Email</Label>
+                      <Input
+                        id="admin-email"
+                        type="email"
+                        value={settings.general.adminEmail}
+                        onChange={(e) => updateSetting("general", "adminEmail", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="site-domain">Site Domain</Label>
+                      <Input
+                        id="site-domain"
+                        type="text"
+                        value={settings.general.siteDomain}
+                        onChange={(e) => updateSetting("general", "siteDomain", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="company-name">Company Name</Label>
+                      <Input
+                        id="company-name"
+                        type="text"
+                        value={settings.general.companyName}
+                        onChange={(e) => updateSetting("general", "companyName", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="company-registration">Company Registration</Label>
+                      <Input
+                        id="company-registration"
+                        type="text"
+                        value={settings.general.companyRegistration}
+                        onChange={(e) => updateSetting("general", "companyRegistration", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="effective-date">Effective Date</Label>
+                      <Input
+                        id="effective-date"
+                        type="date"
+                        value={settings.general.effectiveDate}
+                        onChange={(e) => updateSetting("general", "effectiveDate", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="aliases">Aliases</Label>
+                      <Input
+                        id="aliases"
+                        type="text"
+                        value={settings.general.aliases}
+                        onChange={(e) => updateSetting("general", "aliases", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="businessActivity">Business Activity</Label>
+                      <Input
+                        id="businessActivity"
+                        type="text"
+                        value={settings.general.businessActivity}
+                        onChange={(e) => updateSetting("general", "businessActivity", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="redirectUrl">Redirect URL</Label>
+                      <Input
+                        id="redirectUrl"
+                        type="url"
+                        value={settings.general?.redirectUrl}
+                        onChange={(e) => updateSetting("general", "redirectUrl", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="activeRedirection">Active Redirection</Label>
+                      <Select
+                        value={settings.general?.activeRedirection}
+                        onValueChange={(value) => updateSetting("general", "activeRedirection", value)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">Yes</SelectItem>
+                          <SelectItem value="0">No</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="checkout-checkbox-content">Checkout Checkbox Content</Label>
+                      <Textarea
+                        id="checkout-checkbox-content"
+                        value={settings.general.checkoutCheckboxContent}
+                        onChange={(e) => updateSetting("general", "checkoutCheckboxContent", e.target.value)}
+                        placeholder="Enter checkbox content. Separate multiple checkboxes with ||"
+                        rows={4}
+                      />
+                      <p className="text-xs text-gray-500">
+                        Use || to separate multiple checkboxes. You can use HTML for links, e.g., &lt;a href="/terms"&gt;Terms&lt;/a&gt;.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t">
+                    <div className="space-y-2">
+                      <Label>Site Logo (UK)</Label>
+                      <div className="flex items-center gap-4 rounded-lg border p-4">
+                        <div className="w-24 h-24 rounded-md flex items-center justify-center bg-gray-50 overflow-hidden">
+                          {settings.general.logo ? (
+                            <img src={settings.general.logo} alt="Logo Preview" className="h-full w-full object-contain" />
+                          ) : (
+                            <span className="text-xs text-gray-500">No Logo</span>
+                          )}
+                        </div>
+                        <div className="flex-1 space-y-2">
+                          <Input
+                            id="logo-upload"
+                            type="file"
+                            accept="image/png, image/jpeg, image/svg+xml"
+                            onChange={handleLogoUpload}
+                            className="hidden"
+                          />
+                          <Button asChild variant="outline">
+                            <label htmlFor="logo-upload" className="cursor-pointer w-full flex items-center justify-center gap-2">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                              </svg>
+                              {uploadingLogo ? "Uploading..." : "Upload Logo"}
+                            </label>
+                          </Button>
+                          <p className="text-xs text-gray-500">PNG, JPG, SVG. Max 2MB.</p>
+                          {logoUploadError && <p className="text-sm text-red-500 mt-1">{logoUploadError}</p>}
+                        </div>
                       </div>
                     </div>
-                </div>
-                <div className="space-y-2">
-                    <Label>Favicon</Label>
-                    <div className="flex items-center gap-4 rounded-lg border p-4">
-                      <div className="w-24 h-24 rounded-md flex items-center justify-center bg-gray-50 overflow-hidden">
-                        {settings.general.favicon ? (
-                          <img src={settings.general.favicon} alt="Favicon Preview" className="h-16 w-16 object-contain" />
-                        ) : (
-                          <span className="text-xs text-gray-500">No Favicon</span>
-                        )}
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <Input id="favicon-upload" type="file" accept=".jpg, image/x-icon, image/png, image/jpeg, image/svg+xml" onChange={handleFaviconUpload} className="hidden" />
-                        <Button asChild variant="outline">
-                          <label htmlFor="favicon-upload" className="cursor-pointer w-full flex items-center justify-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                            {uploadingFavicon ? "Uploading..." : "Upload Favicon"}
-                          </label>
-                        </Button>
-                        <p className="text-xs text-gray-500">ICO, PNG, SVG. Recommended: 32x32px.</p>
-                        {faviconUploadError && <p className="text-sm text-red-500 mt-1">{faviconUploadError}</p>}
+                    <div className="space-y-2">
+                      <Label>Favicon (UK)</Label>
+                      <div className="flex items-center gap-4 rounded-lg border p-4">
+                        <div className="w-24 h-24 rounded-md flex items-center justify-center bg-gray-50 overflow-hidden">
+                          {settings.general.favicon ? (
+                            <img src={settings.general.favicon} alt="Favicon Preview" className="h-16 w-16 object-contain" />
+                          ) : (
+                            <span className="text-xs text-gray-500">No Favicon</span>
+                          )}
+                        </div>
+                        <div className="flex-1 space-y-2">
+                          <Input id="favicon-upload" type="file" accept=".jpg, image/x-icon, image/png, image/jpeg, image/svg+xml" onChange={handleFaviconUpload} className="hidden" />
+                          <Button asChild variant="outline">
+                            <label htmlFor="favicon-upload" className="cursor-pointer w-full flex items-center justify-center gap-2">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                              {uploadingFavicon ? "Uploading..." : "Upload Favicon"}
+                            </label>
+                          </Button>
+                          <p className="text-xs text-gray-500">ICO, PNG, SVG. Recommended: 32x32px.</p>
+                          {faviconUploadError && <p className="text-sm text-red-500 mt-1">{faviconUploadError}</p>}
+                        </div>
                       </div>
                     </div>
-                </div>
-              </div>
+                  </div>
+                </TabsContent>
+
+                {/* UAE Tab Content */}
+                <TabsContent value="uae" className="space-y-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <Label htmlFor="site-name-uae">Site Name (UAE)</Label>
+                      <Input
+                        id="site-name-uae"
+                        value={settings.general_uae?.siteName || ""}
+                        onChange={(e) => updateSetting("general_uae", "siteName", e.target.value)}
+                        placeholder="e.g. MONZIC UAE"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="currency-uae">Currency (UAE)</Label>
+                      <Select
+                        value={settings.general_uae?.currency || "AED"}
+                        onValueChange={(value) => updateSetting("general_uae", "currency", value)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="AED">AED (د.إ)</SelectItem>
+                          <SelectItem value="USD">USD ($)</SelectItem>
+                          <SelectItem value="GBP">GBP (£)</SelectItem>
+                          <SelectItem value="EUR">EUR (€)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="support-email-uae">Support Email (UAE)</Label>
+                      <Input
+                        id="support-email-uae"
+                        type="email"
+                        value={settings.general_uae?.supportEmail || ""}
+                        onChange={(e) => updateSetting("general_uae", "supportEmail", e.target.value)}
+                        placeholder="e.g. support@tempnow.ae"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="admin-email-uae">Admin Email (UAE)</Label>
+                      <Input
+                        id="admin-email-uae"
+                        type="email"
+                        value={settings.general_uae?.adminEmail || ""}
+                        onChange={(e) => updateSetting("general_uae", "adminEmail", e.target.value)}
+                        placeholder="e.g. admin@tempnow.ae"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="site-domain-uae">Site Domain (UAE)</Label>
+                      <Input
+                        id="site-domain-uae"
+                        type="text"
+                        value={settings.general_uae?.siteDomain || ""}
+                        onChange={(e) => updateSetting("general_uae", "siteDomain", e.target.value)}
+                        placeholder="e.g. tempnow.ae"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="company-name-uae">Company Name (UAE)</Label>
+                      <Input
+                        id="company-name-uae"
+                        type="text"
+                        value={settings.general_uae?.companyName || ""}
+                        onChange={(e) => updateSetting("general_uae", "companyName", e.target.value)}
+                        placeholder="e.g. SBR Digital"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="company-registration-uae">Company Registration / Licence No. (UAE)</Label>
+                      <Input
+                        id="company-registration-uae"
+                        type="text"
+                        value={settings.general_uae?.companyRegistration || ""}
+                        onChange={(e) => updateSetting("general_uae", "companyRegistration", e.target.value)}
+                        placeholder="e.g. Licence No. 123456"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="effective-date-uae">Effective Date (UAE)</Label>
+                      <Input
+                        id="effective-date-uae"
+                        type="date"
+                        value={settings.general_uae?.effectiveDate || ""}
+                        onChange={(e) => updateSetting("general_uae", "effectiveDate", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="aliases-uae">Aliases (UAE)</Label>
+                      <Input
+                        id="aliases-uae"
+                        type="text"
+                        value={settings.general_uae?.aliases || ""}
+                        onChange={(e) => updateSetting("general_uae", "aliases", e.target.value)}
+                        placeholder="e.g. Tempnow UAE"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="businessActivity-uae">Business Activity (UAE)</Label>
+                      <Input
+                        id="businessActivity-uae"
+                        type="text"
+                        value={settings.general_uae?.businessActivity || ""}
+                        onChange={(e) => updateSetting("general_uae", "businessActivity", e.target.value)}
+                        placeholder="e.g. E-Commerce Services"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="redirectUrl-uae">Redirect URL (UAE)</Label>
+                      <Input
+                        id="redirectUrl-uae"
+                        type="url"
+                        value={settings.general_uae?.redirectUrl || ""}
+                        onChange={(e) => updateSetting("general_uae", "redirectUrl", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="activeRedirection-uae">Active Redirection (UAE)</Label>
+                      <Select
+                        value={settings.general_uae?.activeRedirection || "0"}
+                        onValueChange={(value) => updateSetting("general_uae", "activeRedirection", value)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">Yes</SelectItem>
+                          <SelectItem value="0">No</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="checkout-checkbox-content-uae">Checkout Checkbox Content (UAE)</Label>
+                      <Textarea
+                        id="checkout-checkbox-content-uae"
+                        value={settings.general_uae?.checkoutCheckboxContent || ""}
+                        onChange={(e) => updateSetting("general_uae", "checkoutCheckboxContent", e.target.value)}
+                        placeholder="Enter UAE checkbox content. Separate multiple checkboxes with ||"
+                        rows={4}
+                      />
+                      <p className="text-xs text-gray-500">
+                        Use || to separate multiple checkboxes. You can use HTML for links, e.g., &lt;a href="/terms"&gt;Terms&lt;/a&gt;.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t">
+                    <div className="space-y-2">
+                      <Label>Site Logo (UAE)</Label>
+                      <div className="flex items-center gap-4 rounded-lg border p-4">
+                        <div className="w-24 h-24 rounded-md flex items-center justify-center bg-gray-50 overflow-hidden">
+                          {settings.general_uae?.logo ? (
+                            <img src={settings.general_uae.logo} alt="UAE Logo Preview" className="h-full w-full object-contain" />
+                          ) : (
+                            <span className="text-xs text-gray-500">No Logo</span>
+                          )}
+                        </div>
+                        <div className="flex-1 space-y-2">
+                          <Input
+                            id="logo-upload-uae"
+                            type="file"
+                            accept="image/png, image/jpeg, image/svg+xml"
+                            onChange={handleLogoUploadUae}
+                            className="hidden"
+                          />
+                          <Button asChild variant="outline">
+                            <label htmlFor="logo-upload-uae" className="cursor-pointer w-full flex items-center justify-center gap-2">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                              </svg>
+                              {uploadingLogoUae ? "Uploading..." : "Upload Logo"}
+                            </label>
+                          </Button>
+                          <p className="text-xs text-gray-500">PNG, JPG, SVG. Max 2MB.</p>
+                          {logoUploadErrorUae && <p className="text-sm text-red-500 mt-1">{logoUploadErrorUae}</p>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Favicon (UAE)</Label>
+                      <div className="flex items-center gap-4 rounded-lg border p-4">
+                        <div className="w-24 h-24 rounded-md flex items-center justify-center bg-gray-50 overflow-hidden">
+                          {settings.general_uae?.favicon ? (
+                            <img src={settings.general_uae.favicon} alt="UAE Favicon Preview" className="h-16 w-16 object-contain" />
+                          ) : (
+                            <span className="text-xs text-gray-500">No Favicon</span>
+                          )}
+                        </div>
+                        <div className="flex-1 space-y-2">
+                          <Input id="favicon-upload-uae" type="file" accept=".jpg, image/x-icon, image/png, image/jpeg, image/svg+xml" onChange={handleFaviconUploadUae} className="hidden" />
+                          <Button asChild variant="outline">
+                            <label htmlFor="favicon-upload-uae" className="cursor-pointer w-full flex items-center justify-center gap-2">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                              {uploadingFaviconUae ? "Uploading..." : "Upload Favicon"}
+                            </label>
+                          </Button>
+                          <p className="text-xs text-gray-500">ICO, PNG, SVG. Recommended: 32x32px.</p>
+                          {faviconUploadErrorUae && <p className="text-sm text-red-500 mt-1">{faviconUploadErrorUae}</p>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </TabsContent>
+              </Tabs>
               <div className="space-y-4 pt-6 border-t">
                 <h4 className="text-lg font-medium">Document Visibility</h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -3031,7 +3377,7 @@ export function SettingsSection() {
 
             </CardContent>
           </Card>
-                    <Card>
+          <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Shield className="h-5 w-5 text-red-600" />

@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { settings as settingsTable } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 
+export const dynamic = "force-dynamic";
+
 const EMAIL_TEMPLATES_PARAM = 'email_templates';
 
 export async function GET(request: NextRequest) {
@@ -43,13 +45,22 @@ export async function POST(request: NextRequest) {
 
     const value = JSON.stringify(templates);
 
-    await db
-      .insert(settingsTable)
-      .values({ param: EMAIL_TEMPLATES_PARAM, value })
-      .onConflictDoUpdate({
-        target: settingsTable.param,
-        set: { value },
-      });
+    const existing = await db
+      .select()
+      .from(settingsTable)
+      .where(eq(settingsTable.param, EMAIL_TEMPLATES_PARAM))
+      .limit(1);
+
+    if (existing.length > 0) {
+      await db
+        .update(settingsTable)
+        .set({ value })
+        .where(eq(settingsTable.param, EMAIL_TEMPLATES_PARAM));
+    } else {
+      await db
+        .insert(settingsTable)
+        .values({ param: EMAIL_TEMPLATES_PARAM, value });
+    }
 
     
 

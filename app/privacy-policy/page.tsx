@@ -1,29 +1,15 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import { useSettings } from "@/context/settings"
 import { Footer } from "@/components/footer"
 import { Header } from "@/components/header"
 import { Shield } from "lucide-react"
-import { RegionSwitcher, type Region } from "@/components/legal/region-switcher"
 import PrivacyUK from "@/components/legal/privacy-uk"
 import PrivacyUAE from "@/components/legal/privacy-uae"
 
 export default function PrivacyPolicyPage() {
-  const [region, setRegion] = useState<Region>("UK")
   const settings = useSettings()
-
-  useEffect(() => {
-    const savedRegion = localStorage.getItem("legal_region") as Region
-    if (savedRegion === "UK" || savedRegion === "UAE") {
-      setRegion(savedRegion)
-    }
-  }, [])
-
-  const handleRegionChange = (newRegion: Region) => {
-    setRegion(newRegion)
-    localStorage.setItem("legal_region", newRegion)
-  }
+  const isUae = settings?.general?.activeJurisdiction === "uae"
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
@@ -80,11 +66,8 @@ export default function PrivacyPolicyPage() {
               </div>
             </div>
 
-            {/* Region Switcher */}
-            <RegionSwitcher currentRegion={region} onChange={handleRegionChange} />
-
-            {/* Content Sections based on selected Region */}
-            {region === "UK" ? <PrivacyUK /> : <PrivacyUAE />}
+            {/* Content Sections based on admin's active jurisdiction */}
+            {isUae ? <PrivacyUAE /> : <PrivacyUK />}
           </div>
         </div>
       </main>
