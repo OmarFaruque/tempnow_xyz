@@ -1175,10 +1175,13 @@ export function SettingsSection() {
     setUploadingLogo(true);
     setLogoUploadError(null);
 
+    const formData = new FormData();
+    formData.append("file", file);
+
     try {
-      const response = await fetch(`/api/admin/upload-logo?filename=${file.name}`, {
+      const response = await fetch("/api/admin/upload-logo", {
         method: "POST",
-        body: file,
+        body: formData,
       });
 
       if (!response.ok) {
@@ -1205,10 +1208,13 @@ export function SettingsSection() {
     setUploadingFavicon(true);
     setFaviconUploadError(null);
 
+    const formData = new FormData();
+    formData.append("file", file);
+
     try {
-      const response = await fetch(`/api/admin/upload-logo?filename=${file.name}`, {
+      const response = await fetch("/api/admin/upload-logo", {
         method: "POST",
-        body: file,
+        body: formData,
       });
 
       if (!response.ok) {
@@ -1235,10 +1241,13 @@ export function SettingsSection() {
     setUploadingLogoUae(true);
     setLogoUploadErrorUae(null);
 
+    const formData = new FormData();
+    formData.append("file", file);
+
     try {
-      const response = await fetch(`/api/admin/upload-logo?filename=${file.name}`, {
+      const response = await fetch("/api/admin/upload-logo", {
         method: "POST",
-        body: file,
+        body: formData,
       });
 
       if (!response.ok) {
@@ -1265,10 +1274,13 @@ export function SettingsSection() {
     setUploadingFaviconUae(true);
     setFaviconUploadErrorUae(null);
 
+    const formData = new FormData();
+    formData.append("file", file);
+
     try {
-      const response = await fetch(`/api/admin/upload-logo?filename=${file.name}`, {
+      const response = await fetch("/api/admin/upload-logo", {
         method: "POST",
-        body: file,
+        body: formData,
       });
 
       if (!response.ok) {
