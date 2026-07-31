@@ -5,6 +5,24 @@ import { db } from '@/lib/db';
 import { settings } from '@/lib/schema';
 import { eq } from 'drizzle-orm';
 
+function parseStoredJsonValue<T>(value: unknown, fallback: T): T {
+  if (value == null) return fallback;
+
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+
+  if (typeof value === 'object') {
+    return value as T;
+  }
+
+  return fallback;
+}
+
 export async function GET() {
   try {
     const quoteFormulaSetting = await db
@@ -17,7 +35,7 @@ export async function GET() {
       return NextResponse.json({ success: false, error: 'Quote formula settings not found.' }, { status: 404 });
     }
 
-    const quoteFormula = JSON.parse(quoteFormulaSetting[0].value || '{}');
+    const quoteFormula = parseStoredJsonValue<Record<string, unknown>>(quoteFormulaSetting[0].value, {});
 
     return NextResponse.json({ success: true, quoteFormula });
   } catch (error) { 

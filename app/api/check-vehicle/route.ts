@@ -17,6 +17,24 @@ interface MotApiConfig {
   mot_token_url?: string;
 }
 
+function parseStoredJsonValue<T>(value: unknown, fallback: T): T {
+  if (value == null) return fallback;
+
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+
+  if (typeof value === 'object') {
+    return value as T;
+  }
+
+  return fallback;
+}
+
 async function getMotAccessToken(motApiConfig?: MotApiConfig): Promise<string> {
   // 1. Check for an existing, valid token in the database
   const tokenRecord = await db.query.settings.findFirst({
@@ -24,14 +42,20 @@ async function getMotAccessToken(motApiConfig?: MotApiConfig): Promise<string> {
   });
 
   if (tokenRecord?.value) {
-    const storedToken: StoredToken = JSON.parse(tokenRecord.value);
-    const storedTime = new Date(storedToken.datetime);
-    const now = new Date();
-    const minutesDiff = (now.getTime() - storedTime.getTime()) / (1000 * 60);
+    const storedToken = parseStoredJsonValue<StoredToken>(tokenRecord.value, {
+      access_token: '',
+      datetime: '',
+    });
 
-    // If token is still valid (less than 58 minutes old), return it
-    if (minutesDiff < 58) {
-      return storedToken.access_token;
+    if (storedToken.access_token && storedToken.datetime) {
+      const storedTime = new Date(storedToken.datetime);
+      const now = new Date();
+      const minutesDiff = (now.getTime() - storedTime.getTime()) / (1000 * 60);
+
+      // If token is still valid (less than 58 minutes old), return it
+      if (minutesDiff < 58) {
+        return storedToken.access_token;
+      }
     }
   }
 
@@ -73,13 +97,21 @@ async function getMotAccessToken(motApiConfig?: MotApiConfig): Promise<string> {
     datetime: new Date().toISOString(),
   };
 
-  await db
-    .insert(settings)
-    .values({ param: 'mot_token', value: JSON.stringify(newTokenToStore) })
-    .onConflictDoUpdate({
-      target: settings.param,
-      set: { value: JSON.stringify(newTokenToStore) },
-    });
+  const tokenValue = JSON.stringify(newTokenToStore);
+  const existingMotTokenSetting = await db.query.settings.findFirst({
+    where: eq(settings.param, 'mot_token'),
+  });
+
+  if (existingMotTokenSetting) {
+    await db
+      .update(settings)
+      .set({ value: tokenValue })
+      .where(eq(settings.param, 'mot_token'));
+  } else {
+    await db
+      .insert(settings)
+      .values({ param: 'mot_token', value: tokenValue });
+  }
 
   return accessToken;
 }
@@ -228,8 +260,8 @@ export async function POST(request: Request) {
       where: eq(settings.param, 'motApi')
     });
 
-    const generalSettings = settingsFromDb?.value ? JSON.parse(settingsFromDb.value) : {};
-    const motApiSettings = motApiSettingsFromDb?.value ? JSON.parse(motApiSettingsFromDb.value) : {};
+    const generalSettings = parseStoredJsonValue<Record<string, any>>(settingsFromDb?.value, {});
+    const motApiSettings = parseStoredJsonValue<Record<string, any>>(motApiSettingsFromDb?.value, {});
     const apiProvider = generalSettings.carSearchApiProvider || 'dayinsure';
 
     const mot_api_key = motApiSettings.mot_api_key || generalSettings.mot_api_key;
