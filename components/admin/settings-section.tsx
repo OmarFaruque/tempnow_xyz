@@ -751,6 +751,14 @@ export function SettingsSection() {
       checkoutCheckboxContent: "",
       favicon: "",
     },
+    motApi: {
+      mot_api_key: "",
+      check_car_details_api_key: "",
+      mot_client_id: "",
+      mot_client_secret: "",
+      mot_scope_url: "",
+      mot_token_url: "",
+    },
     bank: {
       show: false,
       name: "",
@@ -1112,6 +1120,12 @@ export function SettingsSection() {
               ...result.settings.general,
             };
           }
+          if (result.settings.motApi) {
+            newSettings.motApi = {
+              ...prevSettings.motApi,
+              ...result.settings.motApi,
+            };
+          }
           return newSettings;
         });
       } else {
@@ -1153,6 +1167,12 @@ export function SettingsSection() {
     checkoutcomLive: false,
     authorizenetSandbox: false,
     authorizenetLive: false,
+    motApiKey: false,
+    checkCarDetailsApiKey: false,
+    motClientID: false,
+    motClientSecret: false,
+    motScopeUrl: false,
+    motTokenUrl: false,
   })
 
   const [testResults, setTestResults] = useState<Record<string, any>>({})
@@ -3314,6 +3334,111 @@ export function SettingsSection() {
                   </div>
                 </TabsContent>
               </Tabs>
+
+              <div className="space-y-4 pt-6 border-t">
+                <h4 className="text-lg font-medium">Shared MOT & Vehicle API Keys</h4>
+                <p className="text-sm text-gray-500">
+                  These credentials are shared across both UK and UAE settings.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label htmlFor="mot_api_key">MOT API Key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="mot_api_key"
+                        type={showKeys.motApiKey ? "text" : "password"}
+                        value={showKeys.motApiKey ? settings.motApi.mot_api_key : maskApiKey(settings.motApi.mot_api_key)}
+                        onChange={(e) => updateSetting("motApi", "mot_api_key", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("motApiKey")}>
+                        {showKeys.motApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="check_car_details_api_key">Check Car Details API Key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="check_car_details_api_key"
+                        type={showKeys.checkCarDetailsApiKey ? "text" : "password"}
+                        value={showKeys.checkCarDetailsApiKey ? settings.motApi.check_car_details_api_key : maskApiKey(settings.motApi.check_car_details_api_key)}
+                        onChange={(e) => updateSetting("motApi", "check_car_details_api_key", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("checkCarDetailsApiKey")}>
+                        {showKeys.checkCarDetailsApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="mot_client_id">MOT Client ID</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="mot_client_id"
+                        type={showKeys.motClientID ? "text" : "password"}
+                        value={showKeys.motClientID ? settings.motApi.mot_client_id : maskApiKey(settings.motApi.mot_client_id)}
+                        onChange={(e) => updateSetting("motApi", "mot_client_id", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("motClientID")}>
+                        {showKeys.motClientID ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="mot_client_secret">MOT Client Secret</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="mot_client_secret"
+                        type={showKeys.motClientSecret ? "text" : "password"}
+                        value={showKeys.motClientSecret ? settings.motApi.mot_client_secret : maskApiKey(settings.motApi.mot_client_secret)}
+                        onChange={(e) => updateSetting("motApi", "mot_client_secret", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("motClientSecret")}>
+                        {showKeys.motClientSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="mot_scope_url">MOT Scope URL</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="mot_scope_url"
+                        type={showKeys.motScopeUrl ? "text" : "password"}
+                        value={showKeys.motScopeUrl ? settings.motApi.mot_scope_url : maskApiKey(settings.motApi.mot_scope_url)}
+                        onChange={(e) => updateSetting("motApi", "mot_scope_url", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("motScopeUrl")}>
+                        {showKeys.motScopeUrl ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="mot_token_url">MOT Token URL</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="mot_token_url"
+                        type={showKeys.motTokenUrl ? "text" : "password"}
+                        value={showKeys.motTokenUrl ? settings.motApi.mot_token_url : maskApiKey(settings.motApi.mot_token_url)}
+                        onChange={(e) => updateSetting("motApi", "mot_token_url", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("motTokenUrl")}>
+                        {showKeys.motTokenUrl ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="space-y-4 pt-6 border-t">
                 <h4 className="text-lg font-medium">Document Visibility</h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
