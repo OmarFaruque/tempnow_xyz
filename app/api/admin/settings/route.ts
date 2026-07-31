@@ -111,6 +111,12 @@ export async function POST(request: NextRequest) {
     if (logData.authorizenet?.sandboxTransactionKey) logData.authorizenet.sandboxTransactionKey = "[REDACTED]";
     if (logData.authorizenet?.liveApiLoginId) logData.authorizenet.liveApiLoginId = "[REDACTED]";
     if (logData.authorizenet?.liveTransactionKey) logData.authorizenet.liveTransactionKey = "[REDACTED]";
+    if (logData.motApi?.mot_api_key) logData.motApi.mot_api_key = "[REDACTED]";
+    if (logData.motApi?.check_car_details_api_key) logData.motApi.check_car_details_api_key = "[REDACTED]";
+    if (logData.motApi?.mot_client_id) logData.motApi.mot_client_id = "[REDACTED]";
+    if (logData.motApi?.mot_client_secret) logData.motApi.mot_client_secret = "[REDACTED]";
+    if (logData.motApi?.mot_scope_url) logData.motApi.mot_scope_url = "[REDACTED]";
+    if (logData.motApi?.mot_token_url) logData.motApi.mot_token_url = "[REDACTED]";
 
     revalidatePath('/');
     revalidatePath('/administrator');
