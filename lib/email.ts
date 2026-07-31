@@ -12,13 +12,28 @@ export interface EmailTemplate {
   attachments?:any
 }
 
+function parseSettingValue<T = any>(value: unknown): T | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === 'object') {
+    return value as T;
+  }
+  return null;
+}
+
 async function getResendSettings() {
   try {
     const resendSettings = await db.query.settings.findFirst({
       where: eq(settings.param, 'resend')
     });
     if (resendSettings && resendSettings.value) {
-      return JSON.parse(resendSettings.value);
+      return parseSettingValue(resendSettings.value);
     }
     return null;
   } catch (error) {
@@ -77,7 +92,7 @@ export async function getEmailTemplates() {
       where: eq(settings.param, 'email_templates')
     });
     if (emailTemplatesSetting && emailTemplatesSetting.value) {
-      return JSON.parse(emailTemplatesSetting.value);
+      return parseSettingValue(emailTemplatesSetting.value);
     }
     return null;
   } catch (error) {
@@ -151,7 +166,7 @@ export async function createAIDocumentPurchaseEmail(
   let siteName = "";
   let companyName = "";
   if (generalSettings && generalSettings.value) {
-    const parsedSettings = JSON.parse(generalSettings.value);
+    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
     siteName = parsedSettings.siteName || "";
     companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
   }
@@ -205,7 +220,7 @@ export async function createInsurancePolicyEmail(
   let siteName = "";
   let companyName = "";
   if (generalSettings && generalSettings.value) {
-    const parsedSettings = JSON.parse(generalSettings.value);
+    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
     siteName = parsedSettings.siteName || "";
     companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
   }
@@ -285,7 +300,7 @@ export async function sendTicketConfirmationEmail({
     let siteName = "";
     let companyName = "";
     if (generalSettings && generalSettings.value) {
-      const parsedSettings = JSON.parse(generalSettings.value);
+      const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
       siteName = parsedSettings.siteName || "";
       companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
     }
@@ -317,7 +332,7 @@ export async function sendExistingTicketEmail({
   let siteName = "";
   let companyName = "";
   if (generalSettings && generalSettings.value) {
-    const parsedSettings = JSON.parse(generalSettings.value);
+    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
     siteName = parsedSettings.siteName || "Tempnow";
     companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
   }
@@ -365,7 +380,7 @@ export async function sendTicketReplyEmail({
     let siteName = "";
     let companyName = "";
     if (generalSettings && generalSettings.value) {
-      const parsedSettings = JSON.parse(generalSettings.value);
+      const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
       siteName = parsedSettings.siteName || "";
       companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
     }
@@ -416,7 +431,7 @@ export async function createPolicyExpiryEmail(
   let siteName = "";
   let companyName = "";
   if (generalSettings && generalSettings.value) {
-    const parsedSettings = JSON.parse(generalSettings.value);
+    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
     siteName = parsedSettings.siteName || "";
     companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
   }
@@ -449,7 +464,7 @@ export async function createDirectEmail(subject: string, message: string) {
   let siteName = "";
   let companyName = "";
   if (generalSettings && generalSettings.value) {
-    const parsedSettings = JSON.parse(generalSettings.value);
+    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
     siteName = parsedSettings.siteName || "";
     companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
   }
@@ -484,7 +499,7 @@ export async function createOrderCancelEmail({
   let siteName = "";
   let companyName = "";
   if (generalSettings && generalSettings.value) {
-    const parsedSettings = JSON.parse(generalSettings.value);
+    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
     siteName = parsedSettings.siteName || "";
     companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
   }
@@ -514,7 +529,7 @@ export async function getAdminEmail() {
       where: eq(settings.param, "general"),
     })
     if (adminSettings && adminSettings.value) {
-      const parsed = JSON.parse(adminSettings.value)
+      const parsed = parseSettingValue<Record<string, any>>(adminSettings.value) || {}
       return parsed.adminEmail || process.env.ADMIN_EMAIL
     }
     return process.env.ADMIN_EMAIL
@@ -533,7 +548,7 @@ export async function createVerificationCodeEmail(firstName: string, code: strin
   let siteName = "";
   let companyName = "";
   if (generalSettings && generalSettings.value) {
-    const parsedSettings = JSON.parse(generalSettings.value);
+    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
     siteName = parsedSettings.siteName || "";
     companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
   }
@@ -581,7 +596,7 @@ export async function createCustomerReplyEmail({
   let siteName = "";
   let companyName = "";
   if (generalSettings && generalSettings.value) {
-    const parsedSettings = JSON.parse(generalSettings.value);
+    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
     siteName = parsedSettings.siteName || "Tempnow";
     companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
   }
