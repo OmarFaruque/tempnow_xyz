@@ -1773,7 +1773,7 @@ export function SettingsSection() {
                 </Select>
                 <br />
               </div>
-              <div className="mt-2"><small className="text-xs text-gray-500"><i>Webhook URL: {process.env.NEXT_PUBLIC_BASE_URL}/api/stripe-webhook</i></small></div>
+              <div className="mt-2"><small className="text-xs text-gray-500"><i>Webhook URL: {process.env.NEXT_PUBLIC_BASE_URL}/api/stripe-webhook</i></small>, &nbsp;<small className="text-xs text-gray-500">Event: <i>payment_intent.succeeded</i></small></div>
 
               <Button
                 onClick={() => testConnection("stripe")}
