@@ -70,7 +70,7 @@ export default function ReturnUAE() {
             <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white font-bold shadow-lg">
               3
             </div>
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-900">If Your Document Is Defective or Not as Described</h2>
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900">If Your Document Is Defective</h2>
           </div>
         </div>
         <div className="p-6 space-y-4">
@@ -90,8 +90,10 @@ export default function ReturnUAE() {
                       Replacement with an equivalent document where repair is not possible
                     </li>
                     <li className="list-disc">
-                      A refund of the amount you paid where repair or replacement is not possible or
-                      does not resolve the defect
+                      A refund of the amount you paid where repair or replacement is not possible or does not resolve the defect
+                    </li>
+                    <li className="list-disc">
+                      A 14-day window to request a refund if the document is defective.
                     </li>
                   </ul>
                 </div>
