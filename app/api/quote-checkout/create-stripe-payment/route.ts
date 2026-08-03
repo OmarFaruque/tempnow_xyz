@@ -7,6 +7,19 @@ import { settings } from "@/lib/schema";
 import { revalidatePath } from "next/cache";
 import { getSettings } from "@/lib/database";
 
+const parseSettingsValue = (value: unknown): Record<string, any> => {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  if (typeof value === "object") return value as Record<string, any>;
+  return {};
+};
+
 export async function POST(req: NextRequest) {
       const { quoteData, user, flp_checksum, radar_session_id } = await req.json();
   
@@ -27,7 +40,7 @@ export async function POST(req: NextRequest) {
           });
           let siteName = "";
           if (generalSettings && generalSettings.value) {
-              const parsedSettings = JSON.parse(generalSettings.value);
+              const parsedSettings = parseSettingsValue(generalSettings.value);
               siteName = parsedSettings.siteName || "";
           }
   
