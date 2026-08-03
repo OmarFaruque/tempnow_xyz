@@ -25,8 +25,20 @@ export async function middleware(request: NextRequest) {
         if (settingsResponse.ok) {
           const settings = await settingsResponse.json();
 
-          if (settings?.activeRedirection === "1" && settings?.redirectUrl) {
-            return NextResponse.redirect(new URL(settings.redirectUrl, request.url));
+          if (String(settings?.activeRedirection) === "1" && settings?.redirectUrl) {
+            const configuredTargetUrl = new URL(settings.redirectUrl, request.url);
+            const shouldUseSpecificRedirectPath =
+              settings?.useSpecificRedirectPath === true || settings?.useSpecificRedirectPath === "yes";
+
+            if (shouldUseSpecificRedirectPath) {
+              const targetWithSamePathAndQuery = new URL(request.nextUrl.pathname + request.nextUrl.search, configuredTargetUrl.origin);
+
+              if (targetWithSamePathAndQuery.href !== request.nextUrl.href) {
+                return NextResponse.redirect(targetWithSamePathAndQuery);
+              }
+            } else if (configuredTargetUrl.href !== request.nextUrl.href) {
+              return NextResponse.redirect(configuredTargetUrl);
+            }
           }
         }
       } catch (error) {

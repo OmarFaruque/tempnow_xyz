@@ -725,6 +725,7 @@ export function SettingsSection() {
       aliases: "",
       businessActivity: "",
       redirectUrl: "",
+      useSpecificRedirectPath: false,
       activeRedirection: "0",
       checkoutCheckboxContent: "",
       favicon: "",
@@ -747,6 +748,7 @@ export function SettingsSection() {
       aliases: "",
       businessActivity: "",
       redirectUrl: "",
+      useSpecificRedirectPath: false,
       activeRedirection: "0",
       checkoutCheckboxContent: "",
       favicon: "",
@@ -3032,29 +3034,50 @@ export function SettingsSection() {
                         onChange={(e) => updateSetting("general", "businessActivity", e.target.value)}
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="redirectUrl">Redirect URL</Label>
-                      <Input
-                        id="redirectUrl"
-                        type="url"
-                        value={settings.general?.redirectUrl}
-                        onChange={(e) => updateSetting("general", "redirectUrl", e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="activeRedirection">Active Redirection</Label>
-                      <Select
-                        value={settings.general?.activeRedirection}
-                        onValueChange={(value) => updateSetting("general", "activeRedirection", value)}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1">Yes</SelectItem>
-                          <SelectItem value="0">No</SelectItem>
-                        </SelectContent>
-                      </Select>
+                    <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="activeRedirection">Active Redirection</Label>
+                          <Select
+                            value={settings.general?.activeRedirection}
+                            onValueChange={(value) => updateSetting("general", "activeRedirection", value)}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="1">Yes</SelectItem>
+                              <SelectItem value="0">No</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-sm">Use Specific Redirect Path</Label>
+                          <Select
+                            value={settings.general?.useSpecificRedirectPath ? "yes" : "no"}
+                            onValueChange={(value) => updateSetting("general", "useSpecificRedirectPath", value === "yes")}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="no">No</SelectItem>
+                              <SelectItem value="yes">Yes</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="redirectUrl">Redirect URL</Label>
+                        <Input
+                          id="redirectUrl"
+                          type={settings.general?.useSpecificRedirectPath ? "text" : "url"}
+                          value={settings.general?.redirectUrl}
+                          onChange={(e) => updateSetting("general", "redirectUrl", e.target.value)}
+                          placeholder="Enter redirect URL"
+                        />
+                      </div>
                     </div>
                     <div className="space-y-2 md:col-span-2">
                       <Label htmlFor="checkout-checkbox-content">Checkout Checkbox Content</Label>
@@ -3237,29 +3260,49 @@ export function SettingsSection() {
                         placeholder="e.g. E-Commerce Services"
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="redirectUrl-uae">Redirect URL (UAE)</Label>
-                      <Input
-                        id="redirectUrl-uae"
-                        type="url"
-                        value={settings.general_uae?.redirectUrl || ""}
-                        onChange={(e) => updateSetting("general_uae", "redirectUrl", e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="activeRedirection-uae">Active Redirection (UAE)</Label>
-                      <Select
-                        value={settings.general_uae?.activeRedirection || "0"}
-                        onValueChange={(value) => updateSetting("general_uae", "activeRedirection", value)}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1">Yes</SelectItem>
-                          <SelectItem value="0">No</SelectItem>
-                        </SelectContent>
-                      </Select>
+                    <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="text-sm">Use Specific Redirect Path (UAE)</Label>
+                          <Select
+                            value={settings.general_uae?.useSpecificRedirectPath ? "yes" : "no"}
+                            onValueChange={(value) => updateSetting("general_uae", "useSpecificRedirectPath", value === "yes")}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="no">No</SelectItem>
+                              <SelectItem value="yes">Yes</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="activeRedirection-uae">Active Redirection (UAE)</Label>
+                          <Select
+                            value={settings.general_uae?.activeRedirection || "0"}
+                            onValueChange={(value) => updateSetting("general_uae", "activeRedirection", value)}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="1">Yes</SelectItem>
+                              <SelectItem value="0">No</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="redirectUrl-uae">Redirect URL (UAE)</Label>
+                        <Input
+                          id="redirectUrl-uae"
+                          type={settings.general_uae?.useSpecificRedirectPath ? "text" : "url"}
+                          value={settings.general_uae?.redirectUrl || ""}
+                          onChange={(e) => updateSetting("general_uae", "redirectUrl", e.target.value)}
+                          placeholder="Enter redirect URL"
+                        />
+                      </div>
                     </div>
                     <div className="space-y-2 md:col-span-2">
                       <Label htmlFor="checkout-checkbox-content-uae">Checkout Checkbox Content (UAE)</Label>
