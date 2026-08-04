@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import {
   CreditCard,
   Key,
@@ -26,12 +27,14 @@ import {
   Clock,
   Info,
   DollarSign,
+  Construction,
 } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { QuoteFormulaSettings } from "./quote-formula-settings"
 import { DocumentTemplatesTab } from "./document-templates-tab"
+import { defaultMaintenanceSettings } from "@/lib/maintenance"
 
 export function EmailTemplatesTab() {
   const [templates, setTemplates] = useState({
@@ -617,13 +620,14 @@ The Tempnow Team`,
 }
 
 export function SettingsSection() {
-  const [settings, setSettings] = useState({
+  const [settings, setSettings] = useState<any>({
     payment: {
       activeProcessor: "mollie", // Changed from "paddle" to "mollie"
     },
     lemonsqueezy: {
       apiKey: "",
       storeId: "",
+      variantId: "",
       webhookSecret: "",
     },
     paddle: {
@@ -753,6 +757,9 @@ export function SettingsSection() {
       checkoutCheckboxContent: "",
       favicon: "",
     },
+    maintenance: {
+      ...defaultMaintenanceSettings,
+    },
     motApi: {
       mot_api_key: "",
       check_car_details_api_key: "",
@@ -775,6 +782,13 @@ export function SettingsSection() {
       apikey: "",
       webhookSecret: "",
       environment: "test",
+    },
+    fraudLabsPro: {
+      enabled: false,
+      apiKey: "",
+      minAmount: "0",
+      action: "block",
+      failOpen: true,
     },
     quoteFormula: {
       baseHourlyRate: 15,
@@ -1079,7 +1093,7 @@ export function SettingsSection() {
 
       if (result.success && result.settings) {
         // Merge with defaults to ensure all properties exist
-        setSettings((prevSettings) => {
+        setSettings((prevSettings: any) => {
           const newSettings = {
             ...prevSettings,
             ...result.settings,
@@ -1122,6 +1136,12 @@ export function SettingsSection() {
               ...result.settings.general,
             };
           }
+          if (result.settings.maintenance) {
+            newSettings.maintenance = {
+              ...prevSettings.maintenance,
+              ...result.settings.maintenance,
+            };
+          }
           if (result.settings.motApi) {
             newSettings.motApi = {
               ...prevSettings.motApi,
@@ -1152,10 +1172,11 @@ export function SettingsSection() {
     setHasChanges(true)
   }
 
-  const [showKeys, setShowKeys] = useState({
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({
     paddle: false,
     stripe: false,
     mollie: false,
+    airwallex: false,
     viva: false,
     square: false,
     lemonsqueezy: false,
@@ -1175,6 +1196,7 @@ export function SettingsSection() {
     motClientSecret: false,
     motScopeUrl: false,
     motTokenUrl: false,
+    fraudLabsPro: false,
   })
 
   const [testResults, setTestResults] = useState<Record<string, any>>({})
@@ -1323,15 +1345,16 @@ export function SettingsSection() {
   };
 
   const updateSquarePaymentMethod = (method: 'card' | 'googlePay' | 'applePay', checked: boolean) => {
-    setSettings((prev) => ({
+    setSettings((prev: any) => ({
       ...prev,
       square: {
         ...prev.square,
         paymentMethods: {
-          card: true,
-          googlePay: false,
-          applePay: false,
-          ...(prev.square?.paymentMethods || {}),
+          ...(prev.square?.paymentMethods || {
+            card: true,
+            googlePay: false,
+            applePay: false,
+          }),
           [method]: checked,
         },
       },
@@ -3557,6 +3580,74 @@ export function SettingsSection() {
 
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Construction className="h-5 w-5 text-amber-600" />
+                Maintenance Mode
+              </CardTitle>
+              <CardDescription>Temporarily pause customer access to the frontend while keeping the admin area available</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 via-white to-teal-50 p-5">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-amber-900">
+                      <Construction className="h-4 w-4" />
+                      Maintenance gate
+                    </div>
+                    <p className="text-sm text-slate-600">
+                      When enabled, visitors are shown a dedicated maintenance page on all public routes. Admin access at /administrator remains available.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-full border border-amber-200 bg-white px-4 py-2 shadow-sm">
+                    <span className={`text-sm font-medium ${settings.maintenance.enabled ? "text-emerald-700" : "text-slate-500"}`}>
+                      {settings.maintenance.enabled ? "Active" : "Inactive"}
+                    </span>
+                    <Switch
+                      checked={settings.maintenance.enabled}
+                      onCheckedChange={(checked) => updateSetting("maintenance", "enabled", checked)}
+                      aria-label="Toggle maintenance mode"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {settings.maintenance.enabled && (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="maintenance-title">Maintenance Title</Label>
+                    <Input
+                      id="maintenance-title"
+                      value={settings.maintenance.title}
+                      onChange={(e) => updateSetting("maintenance", "title", e.target.value)}
+                      placeholder="We’ll be back shortly"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="maintenance-message">Maintenance Message</Label>
+                    <Textarea
+                      id="maintenance-message"
+                      value={settings.maintenance.message}
+                      onChange={(e) => updateSetting("maintenance", "message", e.target.value)}
+                      placeholder="Share what is happening and when visitors should return."
+                      rows={5}
+                    />
+                  </div>
+                  <div className="space-y-2 md:max-w-sm">
+                    <Label htmlFor="maintenance-available-date">Website Available Date</Label>
+                    <Input
+                      id="maintenance-available-date"
+                      type="datetime-local"
+                      value={settings.maintenance.availableDate}
+                      onChange={(e) => updateSetting("maintenance", "availableDate", e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
