@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { settings, aiDocuments, quotes } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { getSettings } from "@/lib/database";
+import { parseSettingsValue } from "@/lib/utils";
 
 type PaypalConfig = {
   environment: 'sandbox' | 'live';
@@ -79,7 +80,8 @@ export async function POST(req: NextRequest) {
   const paymentSettings = await db.query.settings.findFirst({
     where: eq(settings.param, 'payment'),
   });
-  const activeProvider = paymentSettings ? JSON.parse(paymentSettings.value as string).activeProcessor : 'stripe';
+  const paymentConfig = parseSettingsValue(paymentSettings?.value);
+  const activeProvider = paymentConfig.activeProcessor || 'stripe';
 
   const generalSettings = await getSettings('general');
   const siteName = generalSettings?.siteName || "";
