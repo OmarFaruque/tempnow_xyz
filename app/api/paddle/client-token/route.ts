@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPaddleClientToken } from "@/lib/paddle";
 
+
 export async function GET() {
   try {
     const clientToken = await getPaddleClientToken();

@@ -21,3 +21,17 @@ export function isValidUKRegistration(registration: string): boolean {
   
   return ukRegEx.test(registration.trim())
 }
+
+
+export function parseSettingsValue(value: unknown): Record<string, any> {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  if (typeof value === "object") return value as Record<string, any>;
+  return {};
+}
