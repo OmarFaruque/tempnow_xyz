@@ -472,8 +472,12 @@ export async function createDirectEmail(subject: string, message: string) {
   const data = { subject, message, siteName, companyName };
   const finalSubject = replaceEmailVariables(template.subject, data);
   const header = replaceEmailVariables(template.header, data);
-  const content = replaceEmailVariables(template.content, data);
+  let content = replaceEmailVariables(template.content, data);
   const footer = replaceEmailVariables(template.footer, data);
+
+  // Preserve newlines/paragraphs in direct messages by converting to <br>
+  content = content.replace(/\n/g, '<br>');
+  
   const html = buildEmailHtml(siteName, companyName, finalSubject, header, content, footer, 'direct_email');
 
   return { subject: finalSubject, html };
