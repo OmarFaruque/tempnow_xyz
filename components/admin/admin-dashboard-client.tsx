@@ -14,7 +14,8 @@ import {
   Users,
   Loader2,
   LogOut,
-  RotateCcw
+  RotateCcw,
+  Database
 } from "lucide-react"
 
 import { AdminSidebar } from "@/components/admin/admin-sidebar"
@@ -25,6 +26,7 @@ import { AnalyticsSection } from "@/components/admin/analytics-section"
 import { CouponsSection } from "@/components/admin/coupons-section"
 import { BlacklistSection } from "@/components/admin/blacklist-section"
 import { AdminsSection } from "@/components/admin/admins-section"
+import { ExportImportSection } from "@/components/admin/export-import-section"
 
 import { SettingsSection } from "@/components/admin/settings-section"
 import { useTickets } from "@/hooks/use-tickets"
@@ -43,6 +45,7 @@ const navigationItems = [
   { id: "coupons", label: "Coupons", icon: Tag },
   { id: "blacklist", label: "Blacklist", icon: Shield },
   { id: "admins", label: "Admins", icon: UserCheck },
+  { id: "export-import", label: "Export/Import", icon: Database },
   { id: "settings", label: "Settings", icon: Settings },
 ]
 
@@ -109,6 +112,8 @@ export function AdminDashboardClient({
         return <BlacklistSection blacklistData={blacklistData} />
       case "admins":
         return <AdminsSection />
+      case "export-import":
+        return <ExportImportSection />
       case "settings":
         return <SettingsSection />
       default:
