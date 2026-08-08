@@ -58,9 +58,10 @@ export default async function MaintenancePage() {
               <h1 className="max-w-2xl text-4xl font-semibold tracking-tight text-white sm:text-5xl">
                 {maintenanceSettings.title}
               </h1>
-              <p className="max-w-2xl text-base leading-8 text-slate-200 sm:text-lg">
-                {maintenanceSettings.message}
-              </p>
+              <p
+                className="max-w-2xl text-base leading-8 text-slate-200 sm:text-lg [&_a]:font-semibold [&_a]:text-teal-200 [&_a]:underline [&_a]:underline-offset-4 hover:[&_a]:text-teal-100"
+                dangerouslySetInnerHTML={{ __html: maintenanceSettings.message }}
+              />
             </div>
 
             <div className="mt-10 grid gap-4 sm:grid-cols-2">
