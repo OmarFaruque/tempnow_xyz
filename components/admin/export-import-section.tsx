@@ -4,6 +4,8 @@ import { useEffect, useState, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -25,6 +27,8 @@ export function ExportImportSection() {
   // Import State
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<any | null>(null);
+  const [selectedImportTables, setSelectedImportTables] = useState<string[]>([]);
+  const [importMode, setImportMode] = useState<"append" | "override">("append");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -118,10 +122,12 @@ export function ExportImportSection() {
           throw new Error("Invalid backup format. Missing 'version' or 'data' field.");
         }
         setImportPreview(json);
+        setSelectedImportTables(Object.keys(json.data));
       } catch (err: any) {
         setMessage({ type: "error", text: `Invalid backup file: ${err.message}` });
         setImportFile(null);
         setImportPreview(null);
+        setSelectedImportTables([]);
       }
     };
     reader.readAsText(file);
@@ -133,6 +139,12 @@ export function ExportImportSection() {
       return;
     }
 
+    if (selectedImportTables.length === 0) {
+      setMessage({ type: "error", text: "Please select at least one table to import." });
+      return;
+    }
+
+
     setIsProcessing(true);
     setMessage(null);
 
@@ -140,7 +152,7 @@ export function ExportImportSection() {
       const res = await fetch("/api/admin/db-export-import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "import", payload: importPreview }),
+        body: JSON.stringify({ action: "import", payload: importPreview, tables: selectedImportTables, mode: importMode }),
       });
 
       const data = await res.json();
@@ -149,6 +161,8 @@ export function ExportImportSection() {
         setMessage({ type: "success", text: data.message });
         setImportFile(null);
         setImportPreview(null);
+        setSelectedImportTables([]);
+        setImportMode("append");
         // Refresh rowsCount metadata
         fetchMetadata();
       } else {
@@ -163,6 +177,21 @@ export function ExportImportSection() {
 
   const triggerFileSelect = () => {
     fileInputRef.current?.click();
+  };
+
+  const handleSelectImportTable = (tableId: string) => {
+    setSelectedImportTables((prev) =>
+      prev.includes(tableId) ? prev.filter((id) => id !== tableId) : [...prev, tableId]
+    );
+  };
+
+  const handleSelectAllImportTables = () => {
+    const importTableKeys = Object.keys(importPreview?.data || {});
+    if (selectedImportTables.length === importTableKeys.length) {
+      setSelectedImportTables([]);
+    } else {
+      setSelectedImportTables(importTableKeys);
+    }
   };
 
   return (
@@ -279,7 +308,7 @@ export function ExportImportSection() {
           <Card>
             <CardHeader>
               <CardTitle>Import Backup</CardTitle>
-              <CardDescription>Upload a previously exported JSON backup file. All entries will be upserted (inserted or updated if existing unique keys match).</CardDescription>
+              <CardDescription>Upload a previously exported JSON backup file, choose which tables to import, and decide whether to add to or override existing data.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <input
@@ -309,14 +338,46 @@ export function ExportImportSection() {
                     <AlertTriangle className="h-4 w-4 text-amber-600" />
                     <AlertTitle className="font-semibold text-amber-800">Important Warning</AlertTitle>
                     <AlertDescription className="text-amber-700">
-                      Importing will modify existing records:
+                      Importing will modify existing records based on the selected mode:
                       <ul className="list-disc pl-5 mt-2 space-y-1">
-                        <li><strong>Users Table:</strong> Existing emails will be overriden with the backup data.</li>
-                        <li><strong>Orders/Quotes Table:</strong> Matching policy numbers will be updated.</li>
-                        <li><strong>Other Tables:</strong> Identical primary keys will be updated.</li>
+                        <li><strong>Add to database:</strong> Keeps existing data and replaces duplicate users by email and duplicate quotes by policy number.</li>
+                        <li><strong>Override selected tables:</strong> Deletes all rows from the selected tables before importing backup rows.</li>
+                        <li>Only the tables checked below will be imported.</li>
                       </ul>
                     </AlertDescription>
                   </Alert>
+
+                  <div className="rounded-md border p-4 space-y-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-800">Import Mode</h3>
+                      <p className="text-xs text-gray-500">Choose whether to merge backup data into the database or replace selected tables completely.</p>
+                    </div>
+                    <RadioGroup value={importMode} onValueChange={(value) => setImportMode(value as "append" | "override")} className="grid gap-3 md:grid-cols-2">
+                      <Label htmlFor="import-mode-append" className="flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-gray-50">
+                        <RadioGroupItem id="import-mode-append" value="append" className="mt-0.5" />
+                        <span>
+                          <span className="block font-medium text-gray-900">Add to database</span>
+                          <span className="block text-xs text-gray-500">Import new rows and remove duplicates by unique keys.</span>
+                        </span>
+                      </Label>
+                      <Label htmlFor="import-mode-override" className="flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-gray-50">
+                        <RadioGroupItem id="import-mode-override" value="override" className="mt-0.5" />
+                        <span>
+                          <span className="block font-medium text-gray-900">Override selected tables</span>
+                          <span className="block text-xs text-gray-500">Delete all rows in checked tables before importing.</span>
+                        </span>
+                      </Label>
+                    </RadioGroup>
+                  </div>
+
+                  <div className="flex items-center space-x-2 pb-2">
+                    <Button variant="outline" size="sm" onClick={handleSelectAllImportTables}>
+                      {selectedImportTables.length === Object.keys(importPreview.data).length ? "Deselect All" : "Select All"}
+                    </Button>
+                    <span className="text-xs text-gray-500">
+                      {selectedImportTables.length} of {Object.keys(importPreview.data).length} tables selected for import
+                    </span>
+                  </div>
 
                   <div className="border rounded-md overflow-hidden bg-gray-50/50">
                     <div className="bg-gray-100/80 px-4 py-3 border-b flex justify-between items-center">
@@ -331,6 +392,7 @@ export function ExportImportSection() {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead className="w-[50px]"></TableHead>
                           <TableHead>Table</TableHead>
                           <TableHead className="text-right">Records inside Backup</TableHead>
                         </TableRow>
@@ -338,7 +400,19 @@ export function ExportImportSection() {
                       <TableBody>
                         {Object.keys(importPreview.data).map((key) => (
                           <TableRow key={key}>
-                            <TableCell className="font-medium text-gray-900">{key}</TableCell>
+                            <TableCell>
+                              <Checkbox
+                                id={`import-select-${key}`}
+                                checked={selectedImportTables.includes(key)}
+                                onCheckedChange={() => handleSelectImportTable(key)}
+                              />
+                            </TableCell>
+                            <TableCell className="font-medium text-gray-900">
+                              <label htmlFor={`import-select-${key}`} className="cursor-pointer">
+                                {tables.find((t) => t.id === key)?.label || key}
+                                <code className="text-xs text-gray-400 bg-gray-100 px-1 py-0.5 rounded ml-2">{key}</code>
+                              </label>
+                            </TableCell>
                             <TableCell className="text-right font-mono text-gray-700">
                               {importPreview.data[key]?.length?.toLocaleString() || 0}
                             </TableCell>
@@ -354,12 +428,14 @@ export function ExportImportSection() {
                       onClick={() => {
                         setImportFile(null);
                         setImportPreview(null);
+                        setSelectedImportTables([]);
+                        setImportMode("append");
                       }}
                       disabled={isProcessing}
                     >
                       Cancel
                     </Button>
-                    <Button onClick={handleImport} disabled={isProcessing} className="bg-amber-600 hover:bg-amber-700 text-white">
+                    <Button onClick={handleImport} disabled={isProcessing || selectedImportTables.length === 0} className="bg-amber-600 hover:bg-amber-700 text-white">
                       {isProcessing ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -368,7 +444,7 @@ export function ExportImportSection() {
                       ) : (
                         <>
                           <RefreshCw className="h-4 w-4 mr-2" />
-                          Confirm & Override
+                          Confirm Import
                         </>
                       )}
                     </Button>
