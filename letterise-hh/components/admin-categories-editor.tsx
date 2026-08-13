@@ -9,7 +9,7 @@ import { Label } from '@letterise/components/ui/label'
 import { Textarea } from '@letterise/components/ui/textarea'
 import { Badge } from '@letterise/components/ui/badge'
 import { cn } from '@letterise/lib/utils'
-import { saveCategoryAction, deleteCategoryAction } from '@letterise/app/actions/admin-categories'
+import { saveCategoryAction, deleteCategoryAction } from '@/app/ai-documents/actions/admin-categories'
 import { LucideIconPicker } from './lucide-icon-picker'
 
 type Category = {

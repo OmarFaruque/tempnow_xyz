@@ -32,7 +32,7 @@ import { deleteAdminSession, getAdminSession } from '@letterise/lib/admin-auth'
 import { getAdminDashboardData } from '@letterise/lib/admin-dashboard'
 import { saveAllPlansAction } from '@letterise/lib/plans'
 import { getSettings } from '@letterise/lib/admin-settings'
-import { saveAdminSettingsAction } from '@letterise/app/actions/admin-settings'
+import { saveAdminSettingsAction } from '@/app/ai-documents/actions/admin-settings'
 import { 
   updateTemplateFlag, 
   updateCategoryStatus, 

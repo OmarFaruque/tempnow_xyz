@@ -17,7 +17,7 @@ import {
 import { Check, ExternalLink, Loader2 } from 'lucide-react'
 import { PersonaMark } from '@letterise/components/ai/persona-mark'
 import { normalizeSlug, type AiPersonaSettings } from '@letterise/lib/ai-persona-shared'
-import { updateAiPersonaAction } from '@letterise/app/actions/admin-settings'
+import { updateAiPersonaAction } from '@/app/ai-documents/actions/admin-settings'
 
 const MODELS = [
   { value: 'openai/gpt-4o', label: 'GPT-4o — best quality' },

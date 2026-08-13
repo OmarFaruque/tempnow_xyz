@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Button } from '@letterise/components/ui/button'
-import { startCheckoutSession } from '@letterise/app/actions/stripe'
+import { startCheckoutSession } from '@/app/ai-documents/actions/stripe'
 import { Loader2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 

@@ -9,7 +9,7 @@ import { Label } from '@letterise/components/ui/label'
 import { Textarea } from '@letterise/components/ui/textarea'
 import { Badge } from '@letterise/components/ui/badge'
 import { cn } from '@letterise/lib/utils'
-import { saveTemplateAction, deleteTemplateAction } from '@letterise/app/actions/admin-templates'
+import { saveTemplateAction, deleteTemplateAction } from '@/app/ai-documents/actions/admin-templates'
 import { QuestionsEditor, Question } from './admin-questions-editor'
 
 type Template = {
