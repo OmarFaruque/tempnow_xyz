@@ -6,6 +6,8 @@ const config = {
     "./components/**/*.{ts,tsx}",
     "./app/**/*.{ts,tsx}",
     "./src/**/*.{ts,tsx}",
+    "./letterise-hh/components/**/*.{ts,tsx}",
+    "./letterise-hh/lib/**/*.{ts,tsx}",
     "*.{js,ts,jsx,tsx,mdx}",
   ],
   prefix: "",
@@ -25,12 +27,12 @@ const config = {
         background: "var(--background)",
         foreground: "var(--foreground)",
         primary: {
-          DEFAULT: "#00ab93", // teal-600
-          foreground: "#ffffff",
+          DEFAULT: "var(--primary, #00ab93)",
+          foreground: "var(--primary-foreground, #ffffff)",
         },
         secondary: {
-          DEFAULT: "#4f46e5", // Indigo 600
-          foreground: "#ffffff",
+          DEFAULT: "var(--secondary, #4f46e5)",
+          foreground: "var(--secondary-foreground, #ffffff)",
         },
         destructive: {
           DEFAULT: "var(--destructive)",

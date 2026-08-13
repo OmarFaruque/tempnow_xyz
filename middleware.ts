@@ -29,6 +29,13 @@ export async function middleware(request: NextRequest) {
         if (settingsResponse.ok) {
           const settings = await settingsResponse.json();
 
+          // Dynamic AI Slug Rewrite
+          const aiSlug = settings?.general?.aiSlug || "ai-documents";
+          if (pathname === `/${aiSlug}` || pathname.startsWith(`/${aiSlug}/`)) {
+            const rest = pathname.slice(aiSlug.length + 1);
+            return NextResponse.rewrite(new URL(`/ai-documents${rest}`, request.url));
+          }
+
           if (settings?.maintenance?.enabled && !isMaintenancePage) {
             return NextResponse.rewrite(new URL("/maintenance", request.url))
           }

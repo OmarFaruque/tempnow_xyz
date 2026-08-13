@@ -623,6 +623,7 @@ export function SettingsSection() {
   const [settings, setSettings] = useState<any>({
     payment: {
       activeProcessor: "mollie", // Changed from "paddle" to "mollie"
+      paymentDisabledMessage: "",
     },
     lemonsqueezy: {
       apiKey: "",
@@ -733,6 +734,11 @@ export function SettingsSection() {
       activeRedirection: "0",
       checkoutCheckboxContent: "",
       favicon: "",
+      aiName: "Lettie",
+      aiSlug: "ai-documents",
+      popupEnabled: false,
+      popupTitle: "Announcement",
+      popupMessage: "",
     },
     general_uae: {
       logo: "",
@@ -1598,6 +1604,12 @@ export function SettingsSection() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="none">
+                        <span className="flex items-center gap-2">
+                          <Construction className="h-4 w-4 text-orange-500" />
+                          No Processor (Disabled)
+                        </span>
+                      </SelectItem>
                       <SelectItem value="paddle">
                         Paddle
                         <Badge className="ml-2 bg-blue-100 text-blue-800">Recommended</Badge>
@@ -1614,9 +1626,45 @@ export function SettingsSection() {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-gray-500 mt-1">
-                    This processor will be used for all checkout transactions
+                    This processor will be used for all checkout transactions. Select &quot;No Processor&quot; to disable payments.
                   </p>
                 </div>
+
+                {settings.payment.activeProcessor === "none" && (
+                  <div className="mt-4 space-y-3">
+                    <Alert className="bg-orange-50 border-orange-200">
+                      <Construction className="h-4 w-4 text-orange-600" />
+                      <AlertTitle className="text-orange-800">Payment Processing Disabled</AlertTitle>
+                      <AlertDescription className="text-orange-700 text-sm">
+                        All payment processors are currently disabled. Customers will see the message below on the checkout page instead of payment options.
+                      </AlertDescription>
+                    </Alert>
+                    <div>
+                      <Label htmlFor="payment-disabled-message" className="text-sm font-medium">
+                        Payment Disabled Message (HTML allowed)
+                      </Label>
+                      <p className="text-xs text-gray-500 mb-2">
+                        This message will be shown to customers on the checkout page. You can use HTML tags including links, e.g. <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">{`<a href="https://example.com">Click here</a>`}</code>
+                      </p>
+                      <Textarea
+                        id="payment-disabled-message"
+                        rows={5}
+                        className="font-mono text-sm"
+                        placeholder='We are currently performing system updates. Payments will be reactivated shortly. In the meantime, you can use our partner website: <a href="https://tempify.co.uk" target="_blank" style="color: #2563eb; text-decoration: underline;">Tempify</a>'
+                        value={settings.payment.paymentDisabledMessage || ""}
+                        onChange={(e) => updateSetting("payment", "paymentDisabledMessage", e.target.value)}
+                      />
+                      {settings.payment.paymentDisabledMessage && (
+                        <div className="mt-3">
+                          <Label className="text-xs text-gray-500">Preview:</Label>
+                          <div className="mt-1 p-4 bg-white border border-gray-200 rounded-lg text-sm text-gray-700">
+                            <div dangerouslySetInnerHTML={{ __html: settings.payment.paymentDisabledMessage }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -2950,6 +2998,68 @@ export function SettingsSection() {
                 </Select>
               </div>
 
+              {/* Announcement Popup Settings */}
+              <div className="border border-indigo-200 rounded-xl overflow-hidden">
+                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-5 py-4 border-b border-indigo-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-100">
+                        <Info className="h-5 w-5 text-indigo-600" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-semibold text-indigo-900">Announcement Popup</h3>
+                        <p className="text-xs text-indigo-600">Show a popup message to all website visitors</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Badge variant={settings.general.popupEnabled ? "default" : "secondary"} className={settings.general.popupEnabled ? "bg-green-100 text-green-800 border-green-300" : ""}>
+                        {settings.general.popupEnabled ? "Active" : "Inactive"}
+                      </Badge>
+                      <Switch
+                        id="popup-enabled"
+                        checked={!!settings.general.popupEnabled}
+                        onCheckedChange={(checked) => updateSetting("general", "popupEnabled", checked)}
+                      />
+                    </div>
+                  </div>
+                </div>
+                {settings.general.popupEnabled && (
+                  <div className="p-5 space-y-4 bg-white">
+                    <div className="space-y-2">
+                      <Label htmlFor="popup-title" className="text-sm font-medium">Popup Title</Label>
+                      <Input
+                        id="popup-title"
+                        value={settings.general.popupTitle || ""}
+                        onChange={(e) => updateSetting("general", "popupTitle", e.target.value)}
+                        placeholder="Announcement"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="popup-message" className="text-sm font-medium">Popup Message (HTML allowed)</Label>
+                      <p className="text-xs text-gray-500">
+                        Shown once per session — after closing, it won&apos;t reappear until the visitor opens a new browser session.
+                      </p>
+                      <Textarea
+                        id="popup-message"
+                        rows={5}
+                        className="font-mono text-sm"
+                        placeholder='<p>Welcome to our website! We have exciting news...</p>'
+                        value={settings.general.popupMessage || ""}
+                        onChange={(e) => updateSetting("general", "popupMessage", e.target.value)}
+                      />
+                    </div>
+                    {settings.general.popupMessage && (
+                      <div>
+                        <Label className="text-xs text-gray-500">Preview:</Label>
+                        <div className="mt-1 p-4 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700">
+                          <div dangerouslySetInnerHTML={{ __html: settings.general.popupMessage }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Sub-tabs for UK vs UAE values */}
               <Tabs defaultValue="uk" className="space-y-6">
                 <TabsList className="grid w-full grid-cols-2 max-w-md">
@@ -3101,6 +3211,24 @@ export function SettingsSection() {
                           placeholder="Enter redirect URL"
                         />
                       </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="aiName">AI Assistant Name</Label>
+                      <Input
+                        id="aiName"
+                        value={settings.general.aiName || ""}
+                        onChange={(e) => updateSetting("general", "aiName", e.target.value)}
+                        placeholder="e.g. Cryle AI (Default: Lettie)"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="aiSlug">AI Subpath Slug</Label>
+                      <Input
+                        id="aiSlug"
+                        value={settings.general.aiSlug || ""}
+                        onChange={(e) => updateSetting("general", "aiSlug", e.target.value)}
+                        placeholder="e.g. cryle-ai (Default: ai-documents)"
+                      />
                     </div>
                     <div className="space-y-2 md:col-span-2">
                       <Label htmlFor="checkout-checkbox-content">Checkout Checkbox Content</Label>

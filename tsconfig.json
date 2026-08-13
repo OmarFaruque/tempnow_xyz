@@ -19,9 +19,10 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@letterise/*": ["./letterise-hh/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", "lib/schema.ts.back"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "letterise-hh/app", "letterise-hh/node_modules", "letterise-hh/.next"]
 }

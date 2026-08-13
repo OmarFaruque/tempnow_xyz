@@ -921,7 +921,45 @@ function QuoteCheckoutPage() {
                   <div className="text-4xl font-bold text-primary">£{(quoteData.total).toFixed(2)}</div>
                 </div>
 
-                {paymentView === "selection" && (
+                {/* Payment Disabled Notice */}
+                {(paymentProvider === 'none' || (!paymentProvider && !bankPaymentEnabled)) && (
+                  <div className="space-y-4">
+                    <div className="rounded-xl border-2 border-orange-200 bg-gradient-to-b from-orange-50 to-amber-50 p-6 text-center">
+                      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-orange-100">
+                        <Info className="h-7 w-7 text-orange-600" />
+                      </div>
+                      <h3 className="mb-2 text-lg font-semibold text-orange-900">
+                        Payment Currently Unavailable
+                      </h3>
+                      {settings?.paymentProvider?.paymentDisabledMessage ? (
+                        <div
+                          className="text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none mx-auto [&_a]:text-blue-600 [&_a]:underline [&_a:hover]:text-blue-800"
+                          dangerouslySetInnerHTML={{
+                            __html: DOMPurify.sanitize(settings.paymentProvider.paymentDisabledMessage, {
+                              ALLOWED_TAGS: ['a', 'b', 'i', 'em', 'strong', 'p', 'br', 'span', 'div', 'ul', 'ol', 'li'],
+                              ALLOWED_ATTR: ['href', 'target', 'rel', 'style', 'class'],
+                            }),
+                          }}
+                        />
+                      ) : (
+                        <p className="text-sm text-gray-600 leading-relaxed">
+                          We are currently performing system updates. Online payments will be reactivated shortly. 
+                          We apologise for the inconvenience.
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => router.push('/')}
+                    >
+                      <ArrowLeft className="mr-2 h-4 w-4" />
+                      Return to Homepage
+                    </Button>
+                  </div>
+                )}
+
+                {paymentProvider !== 'none' && paymentView === "selection" && (
                   <>
                     <h3 className="mb-4 text-sm font-medium text-foreground">Select Payment Method</h3>
 

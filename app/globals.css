@@ -105,3 +105,81 @@
     overflow: hidden;
   }
 }
+
+/* Isolated Theme for Letterise (AI Documents) */
+.letterise-theme {
+  --background: #0f0d15;
+  --foreground: #e8e7ea;
+  --card: #18161d;
+  --card-foreground: #e8e7ea;
+  --popover: #18161d;
+  --popover-foreground: #e8e7ea;
+  --primary: #ec4899;
+  --primary-foreground: #ffffff;
+  --secondary: #1a1820;
+  --secondary-foreground: #e8e7ea;
+  --muted: #1a1820;
+  --muted-foreground: #a1a1aa;
+  --accent: #f472b6;
+  --accent-foreground: #ffffff;
+  --border: #27242e;
+  --input: #27242e;
+  --ring: #ec4899;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --radius: 0.5rem;
+
+  background-color: #0f0d15;
+  color: #e8e7ea;
+  background: linear-gradient(to bottom, #0f0d15 0%, #1a1820 50%, #0f0d15 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+.letterise-theme * {
+  border-color: var(--border);
+}
+
+.letterise-theme h1,
+.letterise-theme h2,
+.letterise-theme h3,
+.letterise-theme h4,
+.letterise-theme h5,
+.letterise-theme h6 {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.letterise-theme h1 {
+  font-size: 2.25rem;
+}
+
+.letterise-theme h2 {
+  font-size: 1.875rem;
+}
+
+.letterise-theme h3 {
+  font-size: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .letterise-theme h1 {
+    font-size: 3rem;
+  }
+  .letterise-theme h2 {
+    font-size: 2.25rem;
+  }
+  .letterise-theme h3 {
+    font-size: 1.875rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .letterise-theme h1 {
+    font-size: 3.75rem;
+  }
+  .letterise-theme h2 {
+    font-size: 2.25rem;
+  }
+}

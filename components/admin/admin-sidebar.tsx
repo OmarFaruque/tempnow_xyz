@@ -3,7 +3,8 @@
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { X, Menu } from "lucide-react"
+import { X, Menu, LayoutTemplate } from "lucide-react"
+import Link from "next/link"
 import { useState } from "react"
 import type { LucideIcon } from "lucide-react"
 
@@ -33,7 +34,7 @@ export function AdminSidebar({ items, selectedItem, onSelectItem }: AdminSidebar
   }
 
 
-  
+
 
   return (
     <>
@@ -55,12 +56,12 @@ export function AdminSidebar({ items, selectedItem, onSelectItem }: AdminSidebar
       {/* Sidebar */}
       <div
         className={cn(
-          "fixed lg:static inset-y-0 left-0 z-50 w-64 bg-white shadow-lg border-r transform transition-transform duration-300 ease-in-out lg:transform-none",
+          "fixed lg:static inset-y-0 left-0 z-50 w-64 bg-white shadow-lg border-r transform transition-transform duration-300 ease-in-out lg:transform-none flex flex-col h-full",
           isMobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
         )}
       >
         {/* Header */}
-        <div className="p-4 lg:p-6 border-b flex justify-between items-center">
+        <div className="p-4 lg:p-6 border-b flex justify-between items-center flex-shrink-0">
           <div>
             <h1 className="text-lg lg:text-xl font-bold text-gray-900">Admin Panel</h1>
           </div>
@@ -72,7 +73,7 @@ export function AdminSidebar({ items, selectedItem, onSelectItem }: AdminSidebar
         </div>
 
         {/* Navigation */}
-        <nav className="p-3 lg:p-4 space-y-1 lg:space-y-2 overflow-y-auto max-h-[calc(100vh-120px)]">
+        <nav className="p-3 lg:p-4 space-y-1 lg:space-y-2 overflow-y-auto flex-1">
           {items.map((item) => {
             const Icon = item.icon
             const isSelected = selectedItem === item.id
@@ -102,10 +103,18 @@ export function AdminSidebar({ items, selectedItem, onSelectItem }: AdminSidebar
           })}
         </nav>
 
-        {/* Footer */}
-        {/* <div className="absolute bottom-4 left-4 right-4">
-          <div className="text-xs text-gray-500 text-center">Admin Dashboard v1.0</div>
-        </div> */}
+        {/* AI Documents (Letterise) Admin Link */}
+        <div className="p-3 lg:p-4 border-t border-gray-100">
+          <Link href="/administrator/ai-documents">
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-3 h-10 text-left text-indigo-700 hover:bg-indigo-50 hover:text-indigo-800"
+            >
+              <LayoutTemplate className="h-4 w-4 flex-shrink-0 text-indigo-500" />
+              <span className="flex-1 text-left text-sm lg:text-base">AI Documents Admin</span>
+            </Button>
+          </Link>
+        </div>
       </div>
     </>
   )

@@ -15,9 +15,11 @@ import {
   Loader2,
   LogOut,
   RotateCcw,
-  Database
+  Database,
+  LayoutTemplate,
 } from "lucide-react"
 
+import Link from "next/link"
 import { AdminSidebar } from "@/components/admin/admin-sidebar"
 import { UsersSection } from "@/components/admin/users-section"
 import { PoliciesSection } from "@/components/admin/policies-section"
@@ -156,14 +158,25 @@ export function AdminDashboardClient({
                   Welcome back, {adminUser?.email} ({adminUser?.role})
                 </p>
               </div>
-              <Button
-                onClick={adminLogout}
-                variant="outline"
-                className="flex items-center space-x-2 text-red-600 border-red-200 hover:bg-red-50"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Logout</span>
-              </Button>
+              <div className="flex items-center gap-2">
+                <Link href="/administrator/ai-documents">
+                  <Button
+                    variant="outline"
+                    className="flex items-center space-x-2 text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                  >
+                    <LayoutTemplate className="w-4 h-4" />
+                    <span>AI Documents Admin</span>
+                  </Button>
+                </Link>
+                <Button
+                  onClick={adminLogout}
+                  variant="outline"
+                  className="flex items-center space-x-2 text-red-600 border-red-200 hover:bg-red-50"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Logout</span>
+                </Button>
+              </div>
             </div>
 
             {renderContent(selectedItem)}

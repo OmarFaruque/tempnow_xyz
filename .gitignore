@@ -2,6 +2,9 @@
 
 # dependencies
 /node_modules
+node_modules_backup
+letterise-hh/node_modules
+letterise-hh/.next
 
 # next.js
 /.next/
