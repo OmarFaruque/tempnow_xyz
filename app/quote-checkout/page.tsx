@@ -72,12 +72,12 @@ const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingCh
             quoteData: { ...quoteData, id: quote.id, total: quoteData?.total },
             user: user,
             flp_checksum: flp_checksum,
-             radar_session_id: radarSession.id, // Send session ID to backend
+            radar_session_id: radarSession.id, // Send session ID to backend
           }),
         });
         const { clientSecret, error: clientSecretError } = await response.json();
         if (clientSecretError) throw new Error(clientSecretError.message || "Could not initiate Stripe payment.");
-        
+
         const cardNumberElement = elements.getElement(CardNumberElement);
         if (!cardNumberElement) throw new Error("Card element not found.");
 
@@ -104,7 +104,7 @@ const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingCh
           Card Number
         </Label>
         <div className="relative">
-            <CardNumberElement id="cardNumber" className="h-11 pr-14 p-3 border border-border rounded-lg" options={{style: {base: {fontSize: '16px'}}}} />
+          <CardNumberElement id="cardNumber" className="h-11 pr-14 p-3 border border-border rounded-lg" options={{ style: { base: { fontSize: '16px' } } }} />
         </div>
       </div>
 
@@ -113,13 +113,13 @@ const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingCh
           <Label htmlFor="expiry" className="text-sm font-medium text-foreground">
             Expiry Date
           </Label>
-          <CardExpiryElement id="expiry" className="h-11 p-3 border border-border rounded-lg" options={{style: {base: {fontSize: '16px'}}}} />
+          <CardExpiryElement id="expiry" className="h-11 p-3 border border-border rounded-lg" options={{ style: { base: { fontSize: '16px' } } }} />
         </div>
         <div className="space-y-2">
           <Label htmlFor="cvv" className="text-sm font-medium text-foreground">
             CVV
           </Label>
-          <CardCvcElement id="cvv" className="h-11 p-3 border border-border rounded-lg" options={{style: {base: {fontSize: '16px'}}}} />
+          <CardCvcElement id="cvv" className="h-11 p-3 border border-border rounded-lg" options={{ style: { base: { fontSize: '16px' } } }} />
         </div>
       </div>
     </div>
@@ -284,131 +284,131 @@ const AuthorizeNetPayment = React.forwardRef(({ quoteData, user, quote, onProces
 AuthorizeNetPayment.displayName = 'AuthorizeNetPayment';
 
 const StripeApplePayButton = ({ quoteData, user, quote, onProcessingChange, allTermsAccepted, settings, flp_checksum }) => {
-    const stripe = useStripe();
-    const { toast } = useToast();
-    const [paymentRequest, setPaymentRequest] = useState(null);
-    const [availablePaymentMethods, setAvailablePaymentMethods] = useState<any>(null);
+  const stripe = useStripe();
+  const { toast } = useToast();
+  const [paymentRequest, setPaymentRequest] = useState(null);
+  const [availablePaymentMethods, setAvailablePaymentMethods] = useState<any>(null);
 
-    useEffect(() => {
-        if (stripe) {
-            const pr = stripe.paymentRequest({
-                country: 'GB',
-                currency: (settings?.general?.currency || 'GBP').toLowerCase(),
-                total: {
-                    label: 'Total',
-                    amount: Math.round(quoteData.total * 100),
-                },
-                requestPayerName: true,
-                requestPayerEmail: true,
-            });
+  useEffect(() => {
+    if (stripe) {
+      const pr = stripe.paymentRequest({
+        country: 'GB',
+        currency: (settings?.general?.currency || 'GBP').toLowerCase(),
+        total: {
+          label: 'Total',
+          amount: Math.round(quoteData.total * 100),
+        },
+        requestPayerName: true,
+        requestPayerEmail: true,
+      });
 
-        pr.canMakePayment().then(result => {
+      pr.canMakePayment().then(result => {
 
-          // store the result so we can inspect available methods (and render for debugging)
-          setAvailablePaymentMethods(result);
-          if (result) {
-            
-            setPaymentRequest(pr);
-          }
-        }).catch(error => {
-          console.error('Error checking canMakePayment for Apple Pay:', error);
-        });
+        // store the result so we can inspect available methods (and render for debugging)
+        setAvailablePaymentMethods(result);
+        if (result) {
+
+          setPaymentRequest(pr);
         }
-
-    }, [stripe, quoteData.total, settings]);
-
-    useEffect(() => {
-        let mounted = true;
-        if (paymentRequest) {
-            paymentRequest.on('paymentmethod', async (ev) => {
-                if (!allTermsAccepted) {
-                    toast({ variant: 'destructive', title: 'Missing Information', description: 'Please accept all the terms and conditions.' });
-                    ev.complete('fail');
-                    return;
-                }
-                onProcessingChange(true);
-
-                const handleSuccess = () => {
-                    toast({ title: "Payment Successful", description: "Your payment has been processed." });
-                    localStorage.removeItem('quoteCreationTimestamp');
-                    window.location.href = "/payment-confirmation";
-                };
-
-                try {
-                    // Create the Radar Session
-                    const radarSession = await stripe.createRadarSession();
-
-                    const response = await fetch("/api/quote-checkout/create-stripe-payment", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            quoteData: { ...quoteData, id: quote.id, total: quoteData?.total },
-                            user: user,
-                            flp_checksum: flp_checksum,
-                            radar_session_id: radarSession.id, // Send session ID to backend
-                        }),
-                    });
-                    const { clientSecret, error: clientSecretError } = await response.json();
-                    if (!mounted) return;
-                    if (clientSecretError) throw new Error(clientSecretError.message || "Could not initiate Stripe payment.");
-
-                    const { paymentIntent, error: confirmError } = await stripe.confirmCardPayment(
-                        clientSecret,
-                        { payment_method: ev.paymentMethod.id },
-                        { handleActions: false }
-                    );
-
-                    if (!mounted) return;
-                    if (confirmError) {
-                        ev.complete('fail');
-                        throw confirmError;
-                    }
-
-                    if (paymentIntent.status === "succeeded") {
-                        ev.complete('success');
-                        handleSuccess();
-                    } else if (paymentIntent.status === "requires_action") {
-                        ev.complete('success');
-                        const { error } = await stripe.confirmCardPayment(clientSecret);
-                        if (!mounted) return;
-                        if (error) {
-                            throw error;
-                        }
-                        handleSuccess();
-                    } else {
-                        ev.complete('fail');
-                        throw new Error(`Payment failed with status: ${paymentIntent.status}`);
-                    }
-                } catch (error: any) {
-                    if (!mounted) return;
-                    ev.complete('fail');
-                    toast({ variant: "destructive", title: "Payment Error", description: error.message });
-                    onProcessingChange(false);
-                }
-            });
-        }
-        return () => {
-            mounted = false;
-            if (paymentRequest) {
-                paymentRequest.off('paymentmethod');
-            }
-        };
-    }, [paymentRequest, stripe, allTermsAccepted, quoteData, quote, user, onProcessingChange, toast]);
-
-    if (paymentRequest) {
-        return (
-            <>
-                <div className="relative my-4 flex items-center">
-                    <div className="flex-grow border-t border-border"></div>
-                    <span className="flex-shrink mx-4 text-xs text-muted-foreground">OR</span>
-                    <div className="flex-grow border-t border-border"></div>
-                </div>
-          <PaymentRequestButtonElement options={{ paymentRequest, style: { paymentRequestButton: { height: '56px', theme: 'dark' } } }} className="w-full" />
-          </>
-        );
+      }).catch(error => {
+        console.error('Error checking canMakePayment for Apple Pay:', error);
+      });
     }
 
-    return null;
+  }, [stripe, quoteData.total, settings]);
+
+  useEffect(() => {
+    let mounted = true;
+    if (paymentRequest) {
+      paymentRequest.on('paymentmethod', async (ev) => {
+        if (!allTermsAccepted) {
+          toast({ variant: 'destructive', title: 'Missing Information', description: 'Please accept all the terms and conditions.' });
+          ev.complete('fail');
+          return;
+        }
+        onProcessingChange(true);
+
+        const handleSuccess = () => {
+          toast({ title: "Payment Successful", description: "Your payment has been processed." });
+          localStorage.removeItem('quoteCreationTimestamp');
+          window.location.href = "/payment-confirmation";
+        };
+
+        try {
+          // Create the Radar Session
+          const radarSession = await stripe.createRadarSession();
+
+          const response = await fetch("/api/quote-checkout/create-stripe-payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              quoteData: { ...quoteData, id: quote.id, total: quoteData?.total },
+              user: user,
+              flp_checksum: flp_checksum,
+              radar_session_id: radarSession.id, // Send session ID to backend
+            }),
+          });
+          const { clientSecret, error: clientSecretError } = await response.json();
+          if (!mounted) return;
+          if (clientSecretError) throw new Error(clientSecretError.message || "Could not initiate Stripe payment.");
+
+          const { paymentIntent, error: confirmError } = await stripe.confirmCardPayment(
+            clientSecret,
+            { payment_method: ev.paymentMethod.id },
+            { handleActions: false }
+          );
+
+          if (!mounted) return;
+          if (confirmError) {
+            ev.complete('fail');
+            throw confirmError;
+          }
+
+          if (paymentIntent.status === "succeeded") {
+            ev.complete('success');
+            handleSuccess();
+          } else if (paymentIntent.status === "requires_action") {
+            ev.complete('success');
+            const { error } = await stripe.confirmCardPayment(clientSecret);
+            if (!mounted) return;
+            if (error) {
+              throw error;
+            }
+            handleSuccess();
+          } else {
+            ev.complete('fail');
+            throw new Error(`Payment failed with status: ${paymentIntent.status}`);
+          }
+        } catch (error: any) {
+          if (!mounted) return;
+          ev.complete('fail');
+          toast({ variant: "destructive", title: "Payment Error", description: error.message });
+          onProcessingChange(false);
+        }
+      });
+    }
+    return () => {
+      mounted = false;
+      if (paymentRequest) {
+        paymentRequest.off('paymentmethod');
+      }
+    };
+  }, [paymentRequest, stripe, allTermsAccepted, quoteData, quote, user, onProcessingChange, toast]);
+
+  if (paymentRequest) {
+    return (
+      <>
+        <div className="relative my-4 flex items-center">
+          <div className="flex-grow border-t border-border"></div>
+          <span className="flex-shrink mx-4 text-xs text-muted-foreground">OR</span>
+          <div className="flex-grow border-t border-border"></div>
+        </div>
+        <PaymentRequestButtonElement options={{ paymentRequest, style: { paymentRequestButton: { height: '56px', theme: 'dark' } } }} className="w-full" />
+      </>
+    );
+  }
+
+  return null;
 };
 
 const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_checksum, settings, quote }) => {
@@ -448,10 +448,10 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
   const isLoading = isPaddleLoading || isProcessing;
 
   return (
-    <Button 
-        onClick={handlePaddlePayment} 
-        className="h-14 w-full rounded-lg bg-primary text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-all hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg" 
-        disabled={disabled || isLoading}
+    <Button
+      onClick={handlePaddlePayment}
+      className="h-14 w-full rounded-lg bg-teal-600 text-base font-semibold text-white shadow-lg shadow-teal-600/25 transition-all hover:bg-teal-700 hover:shadow-xl hover:shadow-teal-600/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg"
+      disabled={disabled || isLoading}
     >
       {isLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Lock className="mr-2 h-5 w-5" />}
       {isLoading ? 'Processing...' : `Pay £${discountedTotal.toFixed(2)}`}
@@ -494,10 +494,10 @@ const VivaCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_ch
   const isLoading = isProcessing;
 
   return (
-    <Button 
-        onClick={handleVivaPayment} 
-        className="h-14 w-full rounded-lg bg-primary text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-all hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg" 
-        disabled={disabled || isLoading}
+    <Button
+      onClick={handleVivaPayment}
+      className="h-14 w-full rounded-lg bg-teal-600 text-base font-semibold text-white shadow-lg shadow-teal-600/25 transition-all hover:bg-teal-700 hover:shadow-xl hover:shadow-teal-600/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg"
+      disabled={disabled || isLoading}
     >
       {isLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Lock className="mr-2 h-5 w-5" />}
       {isLoading ? 'Processing...' : `Pay £${discountedTotal.toFixed(2)}`}
@@ -540,7 +540,7 @@ function QuoteCheckoutPage() {
     let providerTitle = paymentProvider.charAt(0).toUpperCase() + paymentProvider.slice(1);
     let providerDescription = 'Securely pay with your card.';
     if (paymentProvider === 'square') {
-        providerDescription = 'Pay with Card, Google Pay, or Apple Pay.';
+      providerDescription = 'Pay with Card, Google Pay, or Apple Pay.';
     }
     paymentMethods.push({
       id: paymentProvider,
@@ -586,7 +586,7 @@ function QuoteCheckoutPage() {
       let content = settings.general.checkoutCheckboxContent ? settings.general.checkoutCheckboxContent.split('||') : [];
       if (content.length === 0 || (content.length === 1 && content[0].trim() === '')) {
         content = [
-          'I confirm I\'ve read and agree to the <a href="/terms-of-services" target="_blank" class="font-medium text-primary hover:underline">Terms of Service</a> and understand this is a non-refundable digital document service. *',
+          'I confirm I\'ve read and agree to the <a href="/terms-of-services" target="_blank" class="font-medium text-teal-600 hover:underline">Terms of Service</a> and understand this is a non-refundable digital document service. *',
           'I acknowledge that all purchases are final and the information I have entered is accurate *'
         ];
       }
@@ -641,59 +641,59 @@ function QuoteCheckoutPage() {
     switch (selectedPaymentMethod) {
       case 'lemonsqueezy':
         try {
-            const response = await fetch('/api/create-payment', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    quoteData: { ...quoteData, id: quote.id, policyNumber: quote.policyNumber, total: quoteData?.total },
-                    user: user,
-                    flp_checksum: flp_checksum,
-                }),
-            });
-            const data = await response.json();
-            if (data.checkoutUrl) {
-                window.location.href = data.checkoutUrl;
-            } else {
-                throw new Error(data.error || 'Could not initiate payment.');
-            }
+          const response = await fetch('/api/create-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              quoteData: { ...quoteData, id: quote.id, policyNumber: quote.policyNumber, total: quoteData?.total },
+              user: user,
+              flp_checksum: flp_checksum,
+            }),
+          });
+          const data = await response.json();
+          if (data.checkoutUrl) {
+            window.location.href = data.checkoutUrl;
+          } else {
+            throw new Error(data.error || 'Could not initiate payment.');
+          }
         } catch (error: any) {
-            toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
-            setIsProcessingPayment(false);
+          toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
+          setIsProcessingPayment(false);
         }
         break;
       case 'mollie':
       case 'paypal':
       case 'checkoutcom':
         try {
-            const response = await fetch('/api/create-payment', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    quoteData: { ...quoteData, id: quote.id, policyNumber: quote.policyNumber, total: quoteData?.total },
-                    user: user,
-                    flp_checksum: flp_checksum,
-                }),
-            });
-            const data = await response.json();
-            if (data.checkoutUrl) {
-                window.location.href = data.checkoutUrl;
-            } else {
-                throw new Error(data.error || 'Could not initiate payment.');
-            }
+          const response = await fetch('/api/create-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              quoteData: { ...quoteData, id: quote.id, policyNumber: quote.policyNumber, total: quoteData?.total },
+              user: user,
+              flp_checksum: flp_checksum,
+            }),
+          });
+          const data = await response.json();
+          if (data.checkoutUrl) {
+            window.location.href = data.checkoutUrl;
+          } else {
+            throw new Error(data.error || 'Could not initiate payment.');
+          }
         } catch (error: any) {
-            toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
-            setIsProcessingPayment(false);
+          toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
+          setIsProcessingPayment(false);
         }
-      break;
+        break;
 
       case 'stripe':
         if (stripePaymentRef.current) {
           await stripePaymentRef.current.handlePayment();
         } else {
-            toast({ variant: 'destructive', title: 'Payment Error', description: 'Stripe component not ready.' });
-            setIsProcessingPayment(false);
+          toast({ variant: 'destructive', title: 'Payment Error', description: 'Stripe component not ready.' });
+          setIsProcessingPayment(false);
         }
-      break;
+        break;
 
       case 'authorizenet':
         if (authorizePaymentRef.current) {
@@ -702,7 +702,7 @@ function QuoteCheckoutPage() {
           toast({ variant: 'destructive', title: 'Payment Error', description: 'Authorize.Net component not ready.' });
           setIsProcessingPayment(false);
         }
-      break;
+        break;
 
       case 'airwallex':
         if (!airwallexElement) {
@@ -762,7 +762,7 @@ function QuoteCheckoutPage() {
     }
   };
 
-  const handleSquarePayment = async (token: any) => {
+  const handleSquarePayment = async (token: any, verifiedBuyer?: any) => {
     if (!token) return;
     setIsProcessingPayment(true);
     try {
@@ -771,6 +771,7 @@ function QuoteCheckoutPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sourceId: token.token,
+          verificationToken: verifiedBuyer?.token,
           quoteData: { ...quoteData, id: quote.id, total: quoteData?.total },
           user: user,
           flp_checksum: flp_checksum,
@@ -791,6 +792,23 @@ function QuoteCheckoutPage() {
     }
   };
 
+  const createVerificationDetails = () => ({
+    amount: (quoteData?.total ?? 0).toFixed(2),
+    currencyCode: settings?.general?.currency || 'GBP',
+    intent: 'CHARGE',
+    customerInitiated: true,
+    sellerKeyedIn: false,
+    billingContact: {
+      givenName: quoteData?.customerData?.firstName || user?.firstName || '',
+      familyName: quoteData?.customerData?.lastName || user?.lastName || '',
+      email: user?.email || '',
+      addressLines: [quoteData?.customerData?.address].filter(Boolean) as string[],
+      city: quoteData?.customerData?.city || '',
+      countryCode: quoteData?.customerData?.country || 'GB',
+      postalCode: quoteData?.customerData?.post_code || quoteData?.customerData?.postcode || (quoteData?.customerData as any)?.postCode || '',
+    },
+  });
+
   const createPaymentRequest = () => ({
     countryCode: 'GB',
     currencyCode: settings?.general?.currency || 'GBP',
@@ -810,14 +828,14 @@ function QuoteCheckoutPage() {
   // }, []);
 
   if (!quoteData) {
-    return <Loading />; 
+    return <Loading />;
   }
   const allTermsAccepted = checkboxStates.every(c => c);
 
   return (
     <div className="min-h-screen bg-muted">
-       <ExpirationDialog />
-      <header className="bg-primary px-6 py-4">
+      <ExpirationDialog />
+      <header className="bg-teal-600 px-6 py-4">
         <div className="mx-auto max-w-7xl">
           <Link href="/" className="text-2xl font-bold text-white hover:text-teal-100 transition-colors">
             {settings?.general?.siteName || 'MONZIC'}
@@ -827,12 +845,12 @@ function QuoteCheckoutPage() {
 
       <div className="mx-auto max-w-7xl px-6 py-6">
         <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground" onClick={() => {
-                if (quoteData?.customerData?.registration) {
-                  router.push(`/get-quote?reg=${quoteData.customerData.registration}&view=review`);
-                } else {
-                  router.push('/'); // Fallback to home if reg is not found
-                }
-              }} >
+          if (quoteData?.customerData?.registration) {
+            router.push(`/get-quote?reg=${quoteData.customerData.registration}&view=review`);
+          } else {
+            router.push('/'); // Fallback to home if reg is not found
+          }
+        }} >
           <ArrowLeft className="h-4 w-4" />
           Back to Quote
         </Button>
@@ -842,8 +860,8 @@ function QuoteCheckoutPage() {
         <div className="mx-auto max-w-2xl">
           <div className="rounded-xl border border-border bg-card px-6 py-5 shadow-sm">
             <div className="flex items-center gap-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                <Lock className="h-6 w-6 text-primary" />
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-teal-50">
+                <Lock className="h-6 w-6 text-teal-600" />
               </div>
               <div>
                 <h1 className="text-2xl font-semibold text-card-foreground">Secure Checkout</h1>
@@ -858,15 +876,15 @@ function QuoteCheckoutPage() {
         <div className="mx-auto max-w-2xl">
           <div className="space-y-6">
             <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-              <div className="h-1 bg-gradient-to-r from-primary/80 to-primary" />
+              <div className="h-1 bg-gradient-to-r from-teal-500 to-teal-700" />
 
               <div className="border-b border-border bg-muted bg-section-header px-6 py-4">
                 <h2 className="text-sm font-semibold text-card-foreground">Docs Summary</h2>
               </div>
               <div className="divide-y divide-border p-6">
                 <div className="flex items-center gap-4 pb-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                    <FileText className="h-5 w-5 text-primary" />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50">
+                    <FileText className="h-5 w-5 text-teal-600" />
                   </div>
                   <div className="flex-1">
                     <div className="text-xs font-medium text-muted-foreground">Registration</div>
@@ -874,8 +892,8 @@ function QuoteCheckoutPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4 py-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                    <Car className="h-5 w-5 text-primary" />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50">
+                    <Car className="h-5 w-5 text-teal-600" />
                   </div>
                   <div className="flex-1">
                     <div className="text-xs font-medium text-muted-foreground">Vehicle</div>
@@ -883,8 +901,8 @@ function QuoteCheckoutPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4 py-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                    <Clock className="h-5 w-5 text-primary" />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50">
+                    <Clock className="h-5 w-5 text-teal-600" />
                   </div>
                   <div className="flex-1">
                     <div className="text-xs font-medium text-muted-foreground">Duration</div>
@@ -892,8 +910,8 @@ function QuoteCheckoutPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4 pt-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                    <User className="h-5 w-5 text-primary" />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50">
+                    <User className="h-5 w-5 text-teal-600" />
                   </div>
                   <div className="flex-1">
                     <div className="text-xs font-medium text-muted-foreground">Name</div>
@@ -904,21 +922,21 @@ function QuoteCheckoutPage() {
             </div>
 
             <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-              <div className="h-1 bg-gradient-to-r from-primary/80 to-primary" />
+              <div className="h-1 bg-gradient-to-r from-teal-500 to-teal-700" />
 
               <div className="p-6">
                 <div className="mb-6 flex items-center gap-3 border-b border-border pb-4">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-                    <CreditCard className="h-4 w-4 text-muted-foreground" />
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-50">
+                    <CreditCard className="h-4 w-4 text-teal-600" />
                   </div>
                   <h2 className="text-base font-semibold text-foreground">Payment Method</h2>
                 </div>
 
-                <div className="mb-6 rounded-lg border border-border bg-primary/5 p-5 text-center">
+                <div className="mb-6 rounded-lg border border-teal-100 bg-teal-50/50 p-5 text-center">
                   <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Amount Due
                   </div>
-                  <div className="text-4xl font-bold text-primary">£{(quoteData.total).toFixed(2)}</div>
+                  <div className="text-4xl font-bold text-teal-600">£{(quoteData.total).toFixed(2)}</div>
                 </div>
 
                 {/* Payment Disabled Notice */}
@@ -943,7 +961,7 @@ function QuoteCheckoutPage() {
                         />
                       ) : (
                         <p className="text-sm text-gray-600 leading-relaxed">
-                          We are currently performing system updates. Online payments will be reactivated shortly. 
+                          We are currently performing system updates. Online payments will be reactivated shortly.
                           We apologise for the inconvenience.
                         </p>
                       )}
@@ -965,35 +983,35 @@ function QuoteCheckoutPage() {
 
                     <div className="space-y-3">
                       {paymentMethods.map(method => (
-                          <button
-                            key={method.id}
-                            onClick={() => {
-                                
-                                setSelectedPaymentMethod(method.id);
-                                setPaymentView(method.type === 'card' ? 'card-details' : 'bank-details');
-                            }}
-                            className="w-full rounded-lg border border-border bg-card p-4 text-left transition-all hover:border-border/80 hover:bg-accent"
-                          >
-                            <div className="flex items-center gap-3">
-                              {method.icon}
-                              <div className="flex-1">
-                                <div className="font-medium text-card-foreground">{method.title}</div>
-                                <div className="text-sm text-muted-foreground">{method.description}</div>
-                              </div>
-                              <ArrowLeft className="h-5 w-5 rotate-180 text-muted-foreground" />
+                        <button
+                          key={method.id}
+                          onClick={() => {
+
+                            setSelectedPaymentMethod(method.id);
+                            setPaymentView(method.type === 'card' ? 'card-details' : 'bank-details');
+                          }}
+                          className="w-full rounded-lg border border-border bg-card p-4 text-left transition-all hover:border-border/80 hover:bg-accent"
+                        >
+                          <div className="flex items-center gap-3">
+                            {method.icon}
+                            <div className="flex-1">
+                              <div className="font-medium text-card-foreground">{method.title}</div>
+                              <div className="text-sm text-muted-foreground">{method.description}</div>
                             </div>
-                          </button>
+                            <ArrowLeft className="h-5 w-5 rotate-180 text-muted-foreground" />
+                          </div>
+                        </button>
                       ))}
                       {paymentProvider === 'stripe' && (
                         <div className="mt-2">
                           <StripeApplePayButton
-                              quoteData={quoteData}
-                              user={user}
-                              quote={quote}
-                              onProcessingChange={setIsProcessingPayment}
-                              allTermsAccepted={allTermsAccepted}
-                              settings={settings}
-                              flp_checksum={flp_checksum}
+                            quoteData={quoteData}
+                            user={user}
+                            quote={quote}
+                            onProcessingChange={setIsProcessingPayment}
+                            allTermsAccepted={allTermsAccepted}
+                            settings={settings}
+                            flp_checksum={flp_checksum}
                           />
                         </div>
                       )}
@@ -1003,8 +1021,8 @@ function QuoteCheckoutPage() {
 
                 {paymentView === "card-details" && (
                   <div className="space-y-6">
-                    <div className="flex items-center gap-3 rounded-lg bg-primary/10 p-4">
-                      <CreditCard className="h-5 w-5 text-primary" />
+                    <div className="flex items-center gap-3 rounded-lg bg-teal-50 p-4">
+                      <CreditCard className="h-5 w-5 text-teal-600" />
                       <div>
                         <div className="font-medium text-card-foreground">Credit or Debit Card</div>
                         <div className="text-sm text-muted-foreground">Enter your card details below</div>
@@ -1035,102 +1053,103 @@ function QuoteCheckoutPage() {
                         settings={settings}
                       />
                     )}
-                    
+
                     {selectedPaymentMethod === 'airwallex' && (
-                        <div id="airwallex-card-element" ref={airwallexCardRef} className="border border-border rounded-lg p-4 mb-6"></div>
+                      <div id="airwallex-card-element" ref={airwallexCardRef} className="border border-border rounded-lg p-4 mb-6"></div>
                     )}
                     {selectedPaymentMethod === 'square' && squareAppId && squareLocationId && (settings?.square?.paymentMethods?.card || settings?.square?.paymentMethods?.googlePay || settings?.square?.paymentMethods?.applePay) && (
-                        allTermsAccepted ? (
-                            <PaymentForm
-                                applicationId={squareAppId}
-                                locationId={squareLocationId}
-                                cardTokenizeResponseReceived={handleSquarePayment}
-                                createPaymentRequest={createPaymentRequest}
-                            > 
-                                <div className="space-y-4 my-4">
-                                {settings?.square?.paymentMethods?.googlePay && <SquareGooglePay />}
-                                {settings?.square?.paymentMethods?.applePay && <SquareApplePay />}
-                                {settings?.square?.paymentMethods?.card && (
-                                    <div className="border border-border rounded-lg p-4">
-                                        <SquareCreditCard />
-                                    </div>
-                                )}
-                                </div>
-                            </PaymentForm>
-                        ) : (
-                            <div className="rounded-lg border border-dashed border-yellow-500 bg-yellow-50 p-6 text-center">
-                                <p className="text-sm font-medium leading-relaxed text-yellow-800">
-                                    Please accept all terms and conditions above to proceed with payment.
-                                </p>
-                            </div>
-                        )
+                      allTermsAccepted ? (
+                        <PaymentForm
+                          applicationId={squareAppId}
+                          locationId={squareLocationId}
+                          cardTokenizeResponseReceived={handleSquarePayment}
+                          createPaymentRequest={createPaymentRequest}
+                          createVerificationDetails={createVerificationDetails}
+                        >
+                          <div className="space-y-4 my-4">
+                            {settings?.square?.paymentMethods?.googlePay && <SquareGooglePay />}
+                            {settings?.square?.paymentMethods?.applePay && <SquareApplePay />}
+                            {settings?.square?.paymentMethods?.card && (
+                              <div className="border border-border rounded-lg p-4">
+                                <SquareCreditCard />
+                              </div>
+                            )}
+                          </div>
+                        </PaymentForm>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-yellow-500 bg-yellow-50 p-6 text-center">
+                          <p className="text-sm font-medium leading-relaxed text-yellow-800">
+                            Please accept all terms and conditions above to proceed with payment.
+                          </p>
+                        </div>
+                      )
                     )}
                     {(selectedPaymentMethod === 'mollie' || selectedPaymentMethod === 'paypal' || selectedPaymentMethod === 'viva' || selectedPaymentMethod === 'lemonsqueezy' || selectedPaymentMethod === 'checkoutcom') && (
-                        <div className="rounded-lg border border-border bg-muted p-6 text-center">
-                            <p className="text-sm leading-relaxed text-muted-foreground">
-                                You will be redirected to our payment processor's secure page to complete your payment.
-                            </p>
-                        </div>
+                      <div className="rounded-lg border border-border bg-muted p-6 text-center">
+                        <p className="text-sm leading-relaxed text-muted-foreground">
+                          You will be redirected to our payment processor's secure page to complete your payment.
+                        </p>
+                      </div>
                     )}
 
                     <div className="space-y-3 pt-2">
-                        {checkboxContent.map((content, index) => (
-                            <div className="flex items-start space-x-3" key={index}>
-                                <Checkbox
-                                id={`checkout-checkbox-${index}`}
-                                checked={checkboxStates[index] || false}
-                                onCheckedChange={(c) => handleCheckboxChange(index, c as boolean)}
-                                className="mt-0.5 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
-                                />
-                                <label
-                                htmlFor={`checkout-checkbox-${index}`}
-                                className="text-sm text-muted-foreground richtext-label"
-                                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content) }}
-                                />
-                            </div>
-                        ))}
+                      {checkboxContent.map((content, index) => (
+                        <div className="flex items-start space-x-3" key={index}>
+                          <Checkbox
+                            id={`checkout-checkbox-${index}`}
+                            checked={checkboxStates[index] || false}
+                            onCheckedChange={(c) => handleCheckboxChange(index, c as boolean)}
+                            className="mt-0.5 data-[state=checked]:bg-teal-600 data-[state=checked]:border-teal-600"
+                          />
+                          <label
+                            htmlFor={`checkout-checkbox-${index}`}
+                            className="text-sm text-muted-foreground richtext-label"
+                            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content) }}
+                          />
+                        </div>
+                      ))}
                     </div>
-                    
+
                     {selectedPaymentMethod === 'paddle' ? (
-                        <PaddleCheckoutButton
-                            quoteData={quoteData}
-                            user={user}
-                            discountedTotal={quoteData.total}
-                            disabled={!allTermsAccepted}
-                            flp_checksum={flp_checksum}
-                            settings={settings}
-                            quote={quote}
-                        />
+                      <PaddleCheckoutButton
+                        quoteData={quoteData}
+                        user={user}
+                        discountedTotal={quoteData.total}
+                        disabled={!allTermsAccepted}
+                        flp_checksum={flp_checksum}
+                        settings={settings}
+                        quote={quote}
+                      />
                     ) : selectedPaymentMethod === 'viva' ? (
-                        <VivaCheckoutButton
-                            quoteData={quoteData}
-                            user={user}
-                            discountedTotal={quoteData.total}
-                            disabled={!allTermsAccepted}
-                            flp_checksum={flp_checksum}
-                            settings={settings}
-                            quote={quote}
-                        />
+                      <VivaCheckoutButton
+                        quoteData={quoteData}
+                        user={user}
+                        discountedTotal={quoteData.total}
+                        disabled={!allTermsAccepted}
+                        flp_checksum={flp_checksum}
+                        settings={settings}
+                        quote={quote}
+                      />
                     ) : selectedPaymentMethod === 'lemonsqueezy' ? (
                       <Button
-                      onClick={handleCompletePayment}
-                      className="h-14 w-full rounded-lg bg-primary text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-all hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg"
-                      disabled={!allTermsAccepted || isProcessingPayment}
-                      >
-                      {isProcessingPayment ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Lock className="mr-2 h-5 w-5" />}
-                      {isProcessingPayment ? 'Processing...' : `Pay £${(quoteData.total).toFixed(2)}`}
-                      </Button>
-                    )
-                     : selectedPaymentMethod !== 'square' && (
-                        <Button
                         onClick={handleCompletePayment}
-                        className="h-14 w-full rounded-lg bg-primary text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-all hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg"
+                        className="h-14 w-full rounded-lg bg-teal-600 text-base font-semibold text-white shadow-lg shadow-teal-600/25 transition-all hover:bg-teal-700 hover:shadow-xl hover:shadow-teal-600/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg"
                         disabled={!allTermsAccepted || isProcessingPayment}
-                        >
+                      >
                         {isProcessingPayment ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Lock className="mr-2 h-5 w-5" />}
                         {isProcessingPayment ? 'Processing...' : `Pay £${(quoteData.total).toFixed(2)}`}
+                      </Button>
+                    )
+                      : selectedPaymentMethod !== 'square' && (
+                        <Button
+                          onClick={handleCompletePayment}
+                          className="h-14 w-full rounded-lg bg-teal-600 text-base font-semibold text-white shadow-lg shadow-teal-600/25 transition-all hover:bg-teal-700 hover:shadow-xl hover:shadow-teal-600/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg"
+                          disabled={!allTermsAccepted || isProcessingPayment}
+                        >
+                          {isProcessingPayment ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Lock className="mr-2 h-5 w-5" />}
+                          {isProcessingPayment ? 'Processing...' : `Pay £${(quoteData.total).toFixed(2)}`}
                         </Button>
-                    )}
+                      )}
 
                     <Button variant="outline" onClick={() => setPaymentView("selection")} className="w-full gap-2">
                       <ArrowLeft className="h-4 w-4" />
@@ -1146,8 +1165,8 @@ function QuoteCheckoutPage() {
 
                 {paymentView === "bank-details" && (
                   <div className="space-y-6">
-                    <div className="flex items-center gap-3 rounded-lg bg-primary/10 p-4">
-                      <Building2 className="h-5 w-5 text-primary" />
+                    <div className="flex items-center gap-3 rounded-lg bg-teal-50 p-4">
+                      <Building2 className="h-5 w-5 text-teal-600" />
                       <div>
                         <div className="font-medium text-card-foreground">Bank Transfer</div>
                         <div className="text-sm text-muted-foreground">Direct payment from your bank</div>
@@ -1162,27 +1181,27 @@ function QuoteCheckoutPage() {
                     </div>
 
                     <div className="space-y-3 pt-2">
-                        {checkboxContent.map((content, index) => (
-                            <div className="flex items-start space-x-3" key={index}>
-                                <Checkbox
-                                id={`checkout-checkbox-bank-${index}`}
-                                checked={checkboxStates[index] || false}
-                                onCheckedChange={(c) => handleCheckboxChange(index, c as boolean)}
-                                className="mt-0.5 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
-                                />
-                                <label
-                                htmlFor={`checkout-checkbox-bank-${index}`}
-                                className="text-sm text-muted-foreground"
-                                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content) }}
-                                />
-                            </div>
-                        ))}
+                      {checkboxContent.map((content, index) => (
+                        <div className="flex items-start space-x-3" key={index}>
+                          <Checkbox
+                            id={`checkout-checkbox-bank-${index}`}
+                            checked={checkboxStates[index] || false}
+                            onCheckedChange={(c) => handleCheckboxChange(index, c as boolean)}
+                            className="mt-0.5 data-[state=checked]:bg-teal-600 data-[state=checked]:border-teal-600"
+                          />
+                          <label
+                            htmlFor={`checkout-checkbox-bank-${index}`}
+                            className="text-sm text-muted-foreground"
+                            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content) }}
+                          />
+                        </div>
+                      ))}
                     </div>
 
 
                     <Button
                       onClick={handleCompletePayment}
-                      className="h-14 w-full rounded-lg bg-primary text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-all hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg"
+                      className="h-14 w-full rounded-lg bg-teal-600 text-base font-semibold text-white shadow-lg shadow-teal-600/25 transition-all hover:bg-teal-700 hover:shadow-xl hover:shadow-teal-600/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-lg"
                       disabled={!allTermsAccepted || isProcessingPayment}
                     >
                       {isProcessingPayment ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Lock className="mr-2 h-5 w-5" />}
@@ -1205,8 +1224,8 @@ function QuoteCheckoutPage() {
 
             <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
               <div className="flex items-start gap-4">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                  <Shield className="h-5 w-5 text-primary" />
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-50">
+                  <Shield className="h-5 w-5 text-teal-600" />
                 </div>
                 <div className="space-y-2">
                   <h3 className="text-sm font-semibold text-card-foreground">Technical Support & Refunds</h3>
@@ -1217,7 +1236,7 @@ function QuoteCheckoutPage() {
                   </p>
                   <a
                     href="/contact"
-                    className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-teal-600 hover:underline"
                   >
                     Contact Support
                     <ArrowLeft className="h-3.5 w-3.5 rotate-180" />
@@ -1230,9 +1249,9 @@ function QuoteCheckoutPage() {
       </main>
       {isProcessingPayment && (
         <div className="fixed inset-0 bg-white bg-opacity-80 backdrop-blur-sm flex flex-col items-center justify-center" style={{ zIndex: 999 }}>
-            <Loader2 className="h-10 w-10 animate-spin text-teal-600" />
-            <p className="mt-4 text-lg font-semibold text-gray-700">Processing...</p>
-            <p className="text-sm text-gray-500">Please do not close this window.</p>
+          <Loader2 className="h-10 w-10 animate-spin text-teal-600" />
+          <p className="mt-4 text-lg font-semibold text-gray-700">Processing...</p>
+          <p className="text-sm text-gray-500">Please do not close this window.</p>
         </div>
       )}
     </div>
@@ -1254,7 +1273,7 @@ export default function QuoteCheckoutPageWrapper() {
   }, [paymentProvider, settings]);
 
   if (!settings) {
-    return <Loading />; 
+    return <Loading />;
   }
 
   const page = <DynamicQuoteCheckoutPage />;

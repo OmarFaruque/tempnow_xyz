@@ -13,8 +13,8 @@
     --popover: hsl(0 0% 100%);
     --popover-foreground: hsl(222.2 84% 4.9%);
  
-    --primary: hsl(348, 88%, 43%);
-    --primary-foreground: hsl(210 40% 98%);
+    --primary: hsl(173, 80%, 40%);
+    --primary-foreground: hsl(0 0% 100%);
  
     --secondary: hsl(210 40% 96.1%);
     --secondary-foreground: hsl(222.2 47.4% 11.2%);
@@ -30,7 +30,7 @@
 
     --border: hsl(214.3 31.8% 91.4%);
     --input: hsl(214.3 31.8% 91.4%);
-    --ring: hsl(222.2 84% 4.9%);
+    --ring: hsl(173 80% 40%);
  
     --radius: 0.5rem;
   }
@@ -70,13 +70,22 @@
   * {
     @apply border-border;
   }
+  body:not(:where([class*="admin"] *)) input[type="text"]:focus,
+  body:not(:where([class*="admin"] *)) input[type="email"]:focus,
+  body:not(:where([class*="admin"] *)) input[type="password"]:focus,
+  body:not(:where([class*="admin"] *)) input[type="number"]:focus,
+  body:not(:where([class*="admin"] *)) input[type="tel"]:focus,
+  body:not(:where([class*="admin"] *)) textarea:focus,
+  body:not(:where([class*="admin"] *)) select:focus {
+    border-color: #0d9488 !important; /* teal-600 */
+  }
   body {
     @apply bg-background text-foreground;
   }
 }
 
 .richtext-label a {
-  @apply text-primary underline;
+  @apply text-teal-600 underline hover:text-teal-700;
 }
 
 .richtext-label a:hover {

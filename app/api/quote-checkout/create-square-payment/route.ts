@@ -25,7 +25,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, details: 'Square settings not found.' }, { status: 500 });
     }
 
-    const squareSettings = JSON.parse(squareSettingsRecord[0].value);
+    const rawSquareValue = squareSettingsRecord[0].value;
+    const squareSettings = typeof rawSquareValue === 'string' ? JSON.parse(rawSquareValue) : rawSquareValue;
     const { accessToken, appLocationId, environment } = squareSettings;
 
     if (!accessToken || !appLocationId) {
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
       token: accessToken,
     });
 
-    const { sourceId, quoteData, user, flp_checksum } = await req.json();
+    const { sourceId, verificationToken, quoteData, user, flp_checksum } = await req.json();
 
 
     if (!sourceId || !quoteData || !user || !quoteData.id) {
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest) {
 
         // Need to fetch siteName for product_name
         const generalSettings = await db.query.settings.findFirst({
-            where: eq(settings.param, 'general')
+          where: eq(settings.param, 'general')
         });
         const siteNameFraud = generalSettings && generalSettings.value ? JSON.parse(generalSettings.value).siteName || "" : "";
 
@@ -118,7 +119,7 @@ export async function POST(req: NextRequest) {
         fraudlabsproParams.set("transaction_id", String(quoteData.id));
 
         if (quoteData.promoCode) {
-            fraudlabsproParams.set("promo_code", quoteData.promoCode);
+          fraudlabsproParams.set("promo_code", quoteData.promoCode);
         }
 
         const url = `https://api.fraudlabspro.com/v2/order/screen`;
@@ -129,7 +130,7 @@ export async function POST(req: NextRequest) {
           body: fraudlabsproParams.toString(),
         });
 
-        
+
 
         const raw = await res.json().catch(() => null);
 
@@ -144,7 +145,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        
+
 
         const blockThreshold = fraudSettings?.blockThreshold ?? 80;
         const warnThreshold = fraudSettings?.warnThreshold ?? 60;
@@ -175,7 +176,7 @@ export async function POST(req: NextRequest) {
     } catch (fErr) {
       console.error('Fraud check failed for Square:', fErr);
     }
-    
+
     // Fetch site name and currency from settings
     const generalSettings = await db.query.settings.findFirst({
       where: eq(settings.param, 'general')
@@ -183,22 +184,24 @@ export async function POST(req: NextRequest) {
     let siteName = "";
     let currency = "GBP"; // Default currency
     if (generalSettings && generalSettings.value) {
-      const parsedSettings = JSON.parse(generalSettings.value);
+      const rawGenValue = generalSettings.value;
+      const parsedSettings = typeof rawGenValue === 'string' ? JSON.parse(rawGenValue) : rawGenValue;
       siteName = parsedSettings.siteName || "TEMPNOW";
       currency = parsedSettings.currency || "GBP";
     }
 
     const paymentResult = await squareClient.payments.create({
-        sourceId,
-        idempotencyKey: randomUUID(),
-        locationId: appLocationId,
-        amountMoney: {
-            amount: totalAmount,
-            currency: currency,
-        },
-        note: `${siteName} Docs: Policy ${quoteData.id}`,
+      sourceId,
+      verificationToken,
+      idempotencyKey: randomUUID(),
+      locationId: appLocationId,
+      amountMoney: {
+        amount: totalAmount,
+        currency: currency,
+      },
+      note: `${siteName} Docs: Policy ${quoteData.id}`,
     });
-    
+
     if (paymentResult.payment) {
       // Update database
       await db.update(quotes).set({
@@ -232,7 +235,7 @@ export async function POST(req: NextRequest) {
 
       // Send confirmation email
       const vehicle = quoteData.customerData.vehicle;
-      
+
       const emailHtml = await createInsurancePolicyEmail(
         user.firstName || '',
         user.lastName || '',
@@ -263,9 +266,18 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, payment: paymentResult.payment });
   } catch (error: any) {
-    console.error('Square payment error:', error);
-    const errorMessage = error?.errors?.[0]?.detail || "An unexpected error occurred during payment.";
-    return NextResponse.json({ success: false, details: errorMessage }, { status: 500 });
+    console.error('Square payment error full object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+
+    let errorMessage = "An unexpected error occurred during payment.";
+    if (error?.errors && Array.isArray(error.errors) && error.errors.length > 0) {
+      errorMessage = error.errors.map((e: any) => e.detail || e.category || e.code).join(', ');
+    } else if (error?.detail) {
+      errorMessage = error.detail;
+    } else if (error?.message) {
+      errorMessage = error.message;
+    }
+
+    return NextResponse.json({ success: false, details: errorMessage, rawError: error?.errors || error }, { status: 500 });
   } finally {
     // Restore original toJSON to prevent side-effects
     (BigInt.prototype as any).toJSON = originalToJSON;

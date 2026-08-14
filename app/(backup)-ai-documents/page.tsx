@@ -761,7 +761,7 @@ function AIDocumentsPage({
     [activePurchaseType, toast, triggerImageDownload],
   );
   
-  const handlePayment = useCallback(async (token) => {
+  const handlePayment = useCallback(async (token: any, verifiedBuyer?: any) => {
     switch (paymentProvider) {
       case 'square':
           if (token) {
@@ -774,6 +774,7 @@ function AIDocumentsPage({
                       },
                       body: JSON.stringify({
                           sourceId: token.token,
+                          verificationToken: verifiedBuyer?.token,
                           docData: {
                             prompt: documentRequest,
                             content: generatedText,
@@ -1744,8 +1745,20 @@ function AIDocumentsPage({
                     <PaymentForm
                         applicationId={settings.square.appId}
                         locationId={settings.square.appLocationId}
-                        cardTokenizeResponseReceived={async (token) => {
-                            handlePayment(token);
+                        createVerificationDetails={() => ({
+                            amount: finalPrice.toFixed(2),
+                            currencyCode: settings?.general?.currency || 'GBP',
+                            intent: 'CHARGE',
+                            customerInitiated: true,
+                            sellerKeyedIn: false,
+                            billingContact: {
+                                givenName: user?.firstName || '',
+                                familyName: user?.lastName || '',
+                                email: user?.email || '',
+                            },
+                        })}
+                        cardTokenizeResponseReceived={async (token, verifiedBuyer) => {
+                            handlePayment(token, verifiedBuyer);
                         }}
                     >
                         <div className="space-y-4 sm:space-y-6 mb-4 sm:mb-6">

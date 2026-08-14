@@ -13,10 +13,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, details: 'Square settings not found in the database.' }, { status: 500 });
     }
 
-    const squareSettings = JSON.parse(squareSettingsRecord[0].value);
+    const rawSquareValue = squareSettingsRecord[0].value;
+    const squareSettings = typeof rawSquareValue === 'string' ? JSON.parse(rawSquareValue) : rawSquareValue;
     const { accessToken, appLocationId, environment } = squareSettings;
-
-
 
     if (!accessToken || !appLocationId) {
       return NextResponse.json({ success: false, details: 'Square access token or location ID is not configured.' }, { status: 500 });
@@ -27,7 +26,7 @@ export async function POST(req: NextRequest) {
       token: accessToken
     });
 
-    const { sourceId, docData, user, tip, discount } = await req.json();
+    const { sourceId, verificationToken, docData, user, tip, discount } = await req.json();
 
     // Basic validation
     if (!sourceId || !docData || !user) {
@@ -52,13 +51,15 @@ export async function POST(req: NextRequest) {
     let siteName = "";
     let currency = "GBP"; // Default currency
     if (generalSettings && generalSettings.value) {
-      const parsedSettings = JSON.parse(generalSettings.value);
+      const rawGenValue = generalSettings.value;
+      const parsedSettings = typeof rawGenValue === 'string' ? JSON.parse(rawGenValue) : rawGenValue;
       siteName = parsedSettings.siteName || "";
       currency = parsedSettings.currency || "GBP";
     }
 
     const payment = {
         sourceId: sourceId,
+        verificationToken: verificationToken,
         idempotencyKey: randomUUID(),
         locationId: appLocationId,
         amountMoney: {
