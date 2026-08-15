@@ -153,7 +153,7 @@ export function NotificationContainer({
   notifications,
   onClose,
 }: {
-  notifications: NotificationProps[]
+  notifications: Array<Omit<NotificationProps, "onClose" | "index" | "totalCount">>
   onClose: (id: string) => void
 }) {
   return (

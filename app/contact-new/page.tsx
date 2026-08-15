@@ -6,16 +6,15 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Clock, ShieldCheck, Shield, Menu, X } from "lucide-react"
+import { Clock, ShieldCheck, Shield } from "lucide-react"
 import { useState, useEffect } from "react"
-import { useAuth } from "@/context/auth"
+import { Header } from "@/components/header"
+import { Footer } from "@/components/footer"
 
 export default function ContactPage() {
   const [isVerified, setIsVerified] = useState(false)
   const [verificationAnswer, setVerificationAnswer] = useState("")
   const [currentQuestion, setCurrentQuestion] = useState({ question: "", answer: "" })
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-  const { isAuthenticated, loading } = useAuth()
 
   // Pool of verification questions
   const verificationQuestions = [
@@ -59,79 +58,7 @@ export default function ContactPage() {
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
-      {/* Mobile-Optimized Header */}
-      <header className="bg-teal-600 px-4 sm:px-6 py-3 sm:py-4 flex justify-between items-center shadow-md relative">
-        <div className="flex items-center">
-          <Link href="/">
-            <h1 className="text-xl sm:text-2xl font-bold text-white cursor-pointer hover:text-teal-100 transition-colors">
-              TEMPNOW
-            </h1>
-          </Link>
-        </div>
-
-        {/* Desktop Navigation */}
-        <div className="hidden md:flex gap-3">
-          <Link href="/ai-documents">
-            <Button className="bg-white hover:bg-gray-100 text-teal-600 font-medium">Documents</Button>
-          </Link>
-          <Link href="/contact">
-            <Button
-              variant="outline"
-              className="border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent"
-            >
-              Contact
-            </Button>
-          </Link>
-          <Link href={isAuthenticated ? "/dashboard" : "/login"}>
-            <Button
-              variant="outline"
-              className="border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent"
-              disabled={loading}
-            >
-              {loading ? "..." : isAuthenticated ? "Dashboard" : "Sign In"}
-            </Button>
-          </Link>
-        </div>
-
-        {/* Mobile Menu Button */}
-        <button
-          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-          className="md:hidden p-2 text-white hover:bg-teal-700 rounded-lg transition-colors"
-          aria-label="Toggle menu"
-        >
-          {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-        </button>
-
-        {/* Mobile Navigation Menu */}
-        {isMobileMenuOpen && (
-          <div className="absolute top-full left-0 right-0 bg-teal-600 border-t border-teal-500 md:hidden z-50">
-            <div className="px-4 py-3 space-y-2">
-              <Link href="/ai-documents" onClick={() => setIsMobileMenuOpen(false)}>
-                <Button className="w-full bg-white hover:bg-gray-100 text-teal-600 font-medium justify-start h-12">
-                  AI Documents
-                </Button>
-              </Link>
-              <Link href="/contact" onClick={() => setIsMobileMenuOpen(false)}>
-                <Button
-                  variant="outline"
-                  className="w-full border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent justify-start h-12"
-                >
-                  Contact
-                </Button>
-              </Link>
-              <Link href={isAuthenticated ? "/dashboard" : "/login"} onClick={() => setIsMobileMenuOpen(false)}>
-                <Button
-                  variant="outline"
-                  className="w-full border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent justify-start h-12"
-                  disabled={loading}
-                >
-                  {loading ? "..." : isAuthenticated ? "Dashboard" : "Sign In"}
-                </Button>
-              </Link>
-            </div>
-          </div>
-        )}
-      </header>
+      <Header />
 
       {/* Main Content */}
       <main className="flex-1 px-4 sm:px-6 py-12 sm:py-20 bg-gradient-to-br from-gray-50 via-teal-50 to-gray-100 relative overflow-hidden">
@@ -372,23 +299,7 @@ export default function ContactPage() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="bg-teal-600 py-4 sm:py-6 px-4 sm:px-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex flex-wrap justify-center gap-4 sm:gap-6 text-xs sm:text-sm text-white">
-            <Link href="/privacy-policy" className="hover:text-teal-200 transition-colors">
-              Privacy Policy
-            </Link>
-            <Link href="/terms-of-services" className="hover:text-teal-200 transition-colors">
-              Terms of Services
-            </Link>
-            <Link href="/return-policy" className="hover:text-teal-200 transition-colors">
-              Return Policy
-            </Link>
-          </div>
-          <div className="text-center mt-2 sm:mt-4 text-xs text-teal-100">© 2025 TEMPNOW. All rights reserved.</div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   )
 }

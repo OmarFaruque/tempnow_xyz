@@ -1,12 +1,14 @@
 "use client"
 
 import type React from "react"
-import { useState, useCallback, useMemo, useEffect } from "react"
+
+import { useState, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import {
   Check,
-  Star,
+  Menu,
+  X,
   Shield,
   Clock,
   TrendingUp,
@@ -15,26 +17,27 @@ import {
   Zap,
   FileCheck,
   Download,
+  Sparkles,
+  Rocket,
+  HelpCircle,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { useNotifications } from "@/hooks/use-notifications"
 import { NotificationContainer } from "@/components/notification"
 import { checkBlacklist } from "@/lib/blacklist"
 import Image from "next/image"
-import { useAuth } from "@/context/auth"
 import { useSettings } from "@/context/settings"
-import { Header } from "@/components/header"
+import { useAuth } from "@/context/auth"
 
 export default function MonzicHomepage() {
   const [message, setMessage] = useState("")
   const [mainInput, setMainInput] = useState("")
-  const [currentReviewIndex, setCurrentReviewIndex] = useState(0)
-  const [fadeOut, setFadeOut] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null)
   const router = useRouter()
   const { notifications, removeNotification, showError } = useNotifications()
-  const { isAuthenticated } = useAuth()
   const settings = useSettings()
+  const { isAuthenticated } = useAuth()
   const [loading, setLoading] = useState(false)
 
   const formatRegistration = useCallback((value: string) => {
@@ -86,15 +89,14 @@ export default function MonzicHomepage() {
           let errorData = { message: "Vehicle registration not found. Please check and try again." }
           try {
             errorData = await vehicleResponse.json()
-          } catch (e) {
-            // Ignore JSON parsing error if the response body is empty
+          } catch {
+            // Ignore JSON parsing errors for empty or non-JSON responses.
           }
           setLoading(false)
           showError("Vehicle Not Found", errorData.message || "Vehicle registration not found. Please check and try again.")
           return
         }
 
-        // If the vehicle is found and valid, proceed to the next page.
         router.push(`/get-quote?reg=${encodeURIComponent(cleanReg)}`)
       } catch (error) {
         console.error("Vehicle check failed:", error)
@@ -117,6 +119,14 @@ export default function MonzicHomepage() {
     [formatRegistration, message],
   )
 
+  const toggleMobileMenu = useCallback(() => {
+    setMobileMenuOpen((prev) => !prev)
+  }, [])
+
+  const closeMobileMenu = useCallback(() => {
+    setMobileMenuOpen(false)
+  }, [])
+
   const features = useMemo(
     () => [
       "Wide selection of professional documents",
@@ -126,143 +136,9 @@ export default function MonzicHomepage() {
     [],
   )
 
-  const allReviews = useMemo(
-    () => [
-      {
-        name: "Sarah Johnson",
-        rating: 5,
-        text: "Needed documents fast and TEMPNOW delivered instantly. Professional quality, downloaded in seconds!",
-        date: "2 days ago",
-      },
-      {
-        name: "Michael Chen",
-        rating: 5,
-        text: "The sickness certificate document looked exactly like how I wanted. Super affordable and instant download. Perfect!",
-        date: "1 week ago",
-      },
-      {
-        name: "Emma Thompson",
-        rating: 5,
-        text: "Brilliant service! Got all the vehicle documents I needed for my portfolio. Fast, secure, and hassle-free.",
-        date: "2 weeks ago",
-      },
-      {
-        name: "David Martinez",
-        rating: 5,
-        text: "Best document service online. Ordered a document at midnight and had it instantly. Amazing quality!",
-        date: "3 days ago",
-      },
-      {
-        name: "Sophie Williams",
-        rating: 5,
-        text: "Incredible! The documents are professionally formatted and look amazing. Saved me so much time and money.",
-        date: "5 days ago",
-      },
-      {
-        name: "James Anderson",
-        rating: 5,
-        text: "Used TEMPNOW for some work documents. Lightning fast delivery, perfect quality. Will definitely use again!",
-        date: "1 week ago",
-      },
-      {
-        name: "Olivia Brown",
-        rating: 5,
-        text: "Needed temporary docs urgently and TEMPNOW came through. Instant, affordable, and professional!",
-        date: "4 days ago",
-      },
-      {
-        name: "Ryan Taylor",
-        rating: 5,
-        text: "Outstanding document quality! Got my docs in seconds. This service is a game-changer!",
-        date: "6 days ago",
-      },
-      {
-        name: "Charlotte Davis",
-        rating: 5,
-        text: "Absolutely perfect! The documents are high quality and delivered instantly. Exactly what I needed for my project.",
-        date: "1 week ago",
-      },
-      {
-        name: "Daniel Wilson",
-        rating: 5,
-        text: "Fast, reliable, and professional. Got all my documents sorted in minutes. Highly recommend TEMPNOW!",
-        date: "3 days ago",
-      },
-      {
-        name: "Lucy Harris",
-        rating: 5,
-        text: "The AI document generation is incredible. Professional templates and instant delivery. Worth every penny!",
-        date: "2 weeks ago",
-      },
-      {
-        name: "Benjamin Clark",
-        rating: 5,
-        text: "Needed AI Docs and TEMPNOW delivered immediately. Top quality documents at great prices!",
-        date: "5 days ago",
-      },
-      {
-        name: "Amelia Lewis",
-        rating: 5,
-        text: "Fantastic service! The documents look completely professional and authentic. Download was instant!",
-        date: "1 week ago",
-      },
-      {
-        name: "Thomas Walker",
-        rating: 5,
-        text: "Best £10 I've spent! Got my document instantly. Professional quality and super easy to use.",
-        date: "4 days ago",
-      },
-      {
-        name: "Grace Robinson",
-        rating: 5,
-        text: "TEMPNOW is brilliant! Ordered multiple documents and all were perfect. Fast, secure, and affordable.",
-        date: "6 days ago",
-      },
-      {
-        name: "Oliver Scott",
-        rating: 5,
-        text: "Amazing document service! Got everything I needed in seconds. The quality is outstanding and totally legit looking!",
-        date: "2 days ago",
-      },
-      {
-        name: "Isabella Green",
-        rating: 5,
-        text: "Incredible turnaround time! Ordered vehicle documents late at night and downloaded them immediately. Perfect!",
-        date: "1 week ago",
-      },
-      {
-        name: "Harry Turner",
-        rating: 5,
-        text: "Professional, fast, and affordable. The documents are high quality and look exactly as they should. 5 stars!",
-        date: "3 days ago",
-      },
-    ],
-    [],
-  )
-
-  const currentReviews = useMemo(() => {
-    const reviews = []
-    for (let i = 0; i < 3; i++) {
-      reviews.push(allReviews[(currentReviewIndex + i) % allReviews.length])
-    }
-    return reviews
-  }, [currentReviewIndex, allReviews])
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setFadeOut(true)
-      setTimeout(() => {
-        setCurrentReviewIndex((prev) => (prev + 3) % allReviews.length)
-        setFadeOut(false)
-      }, 700)
-    }, 4000)
-
-    return () => clearInterval(interval)
-  }, [allReviews.length])
-
   const stats = useMemo(
     () => [
-      { value: "10,000+", label: "Documents", icon: TrendingUp },
+      { value: "50,000+", label: "Documents", icon: TrendingUp },
       { value: "99%", label: "Customer Satisfaction", icon: Award },
       { value: "24/7", label: "Support Available", icon: Clock },
       { value: "256-bit", label: "SSL Encryption", icon: Shield },
@@ -275,7 +151,7 @@ export default function MonzicHomepage() {
       {
         question: "What types of documents do you offer?",
         answer:
-          "We offer a wide range of professional documents that are built to your personalised needs. All documents are professionally formatted and available for instant download.",
+          "We offer a wide range of professional documents including MOT certificates, insurance documents, V5C documents, temporary permits, and more. All documents are professionally formatted and available for instant download.",
       },
       {
         question: "How quickly will I receive my documents?",
@@ -323,92 +199,173 @@ export default function MonzicHomepage() {
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
-      <Header />
+      <header className="px-4 sm:px-6 py-3 sm:py-4 relative overflow-hidden isolate border-b border-white/10">
+        {/* Same static two-shade green gradient as the hero so the two blend seamlessly */}
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: "linear-gradient(120deg, #115e59 0%, #0d9488 50%, #14b8a6 100%)",
+          }}
+        />
+        <div
+          className="absolute inset-0 pointer-events-none animate-dot-drift opacity-[0.14]"
+          style={{
+            backgroundImage: "radial-gradient(circle at 1px 1px, rgba(255,255,255,0.9) 1.5px, transparent 0)",
+            backgroundSize: "56px 56px",
+          }}
+        ></div>
+        <div className="max-w-7xl mx-auto relative z-10">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center">
+              <Link href="/" className="text-xl sm:text-2xl font-bold text-white hover:text-teal-100 transition-colors">
+                {settings?.general?.siteName || "TEMPNOW"}
+              </Link>
+            </div>
 
-      <section className="bg-gradient-to-br from-teal-600 to-teal-700 text-white px-4 sm:px-6 py-16 sm:py-24 relative overflow-hidden">
-        <div className="absolute inset-0">
-          {/* Animated wave pattern */}
-          <svg className="absolute inset-0 w-full h-full opacity-20" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <pattern id="wave-pattern" x="0" y="0" width="200" height="200" patternUnits="userSpaceOnUse">
-                <path d="M 0 100 Q 50 50, 100 100 T 200 100" stroke="white" strokeWidth="1" fill="none" opacity="0.5" />
-                <path
-                  d="M 0 150 Q 50 100, 100 150 T 200 150"
-                  stroke="white"
-                  strokeWidth="1"
-                  fill="none"
-                  opacity="0.3"
-                />
-                <circle cx="50" cy="50" r="2" fill="white" opacity="0.6" />
-                <circle cx="150" cy="150" r="2" fill="white" opacity="0.6" />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#wave-pattern)" />
-          </svg>
+            {/* Desktop Navigation */}
+            <nav className="hidden sm:flex gap-2 md:gap-3" role="navigation">
+              <Link href="/ai-documents">
+                <Button className="bg-white hover:bg-teal-50 text-teal-600 font-medium text-sm md:text-base px-3 md:px-4">
+                  AI Documents
+                </Button>
+              </Link>
+              <Link href="/contact">
+                <Button
+                  variant="outline"
+                  className="border-white text-white hover:bg-teal-700 hover:border-teal-100 bg-transparent text-sm md:text-base px-3 md:px-4"
+                >
+                  Contact
+                </Button>
+              </Link>
+              <Link href={isAuthenticated ? "/dashboard" : "/login"}>
+                <Button
+                  variant="outline"
+                  className="border-white text-white hover:bg-teal-700 hover:border-teal-100 bg-transparent text-sm md:text-base px-3 md:px-4"
+                >
+                  {isAuthenticated ? "Dashboard" : "Sign In"}
+                </Button>
+              </Link>
+            </nav>
 
-          {/* Hexagon grid pattern */}
+            {/* Mobile Menu Button */}
+            <button
+              onClick={toggleMobileMenu}
+              className="sm:hidden p-2 text-white hover:bg-teal-700 rounded-md transition-colors"
+              aria-label="Toggle mobile menu"
+            >
+              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+          </div>
+
+          {/* Mobile Navigation */}
+          {mobileMenuOpen && (
+            <nav className="sm:hidden mt-4 pb-4 border-t border-teal-500 pt-4" role="navigation">
+              <div className="flex flex-col space-y-3">
+                <Link href="/ai-documents" onClick={closeMobileMenu}>
+                  <Button className="w-full bg-white hover:bg-teal-50 text-teal-600 font-medium">AI Documents</Button>
+                </Link>
+                <Link href="/contact" onClick={closeMobileMenu}>
+                  <Button
+                    variant="outline"
+                    className="w-full border-white text-white hover:bg-teal-700 hover:border-teal-100 bg-transparent"
+                  >
+                    Contact
+                  </Button>
+                </Link>
+                <Link href={isAuthenticated ? "/dashboard" : "/login"} onClick={closeMobileMenu}>
+                  <Button
+                    variant="outline"
+                    className="w-full border-white text-white hover:bg-teal-700 hover:border-teal-100 bg-transparent"
+                  >
+                    {isAuthenticated ? "Dashboard" : "Sign In"}
+                  </Button>
+                </Link>
+              </div>
+            </nav>
+          )}
+        </div>
+      </header>
+
+      <section className="text-white px-4 sm:px-6 py-20 sm:py-32 relative overflow-hidden isolate">
+        {/* Static two-shade green gradient base */}
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: "linear-gradient(120deg, #115e59 0%, #0d9488 50%, #14b8a6 100%)",
+          }}
+        />
+
+        <div className="absolute inset-0 pointer-events-none">
+          {/* Drifting dot field that fades toward the edges */}
           <div
-            className="absolute inset-0 opacity-15"
+            className="absolute inset-0 animate-dot-drift opacity-[0.18]"
             style={{
-              backgroundImage: `radial-gradient(circle at 25px 25px, rgba(255,255,255,0.4) 2%, transparent 0%),
-                               radial-gradient(circle at 75px 75px, rgba(255,255,255,0.4) 2%, transparent 0%)`,
-              backgroundSize: "100px 100px",
+              backgroundImage: "radial-gradient(circle at 1px 1px, rgba(255,255,255,0.9) 1.5px, transparent 0)",
+              backgroundSize: "56px 56px",
+              maskImage: "radial-gradient(ellipse 85% 80% at 50% 35%, black 30%, transparent 100%)",
+              WebkitMaskImage: "radial-gradient(ellipse 85% 80% at 50% 35%, black 30%, transparent 100%)",
             }}
           />
 
-          {/* Elegant corner accents */}
-          <div className="absolute top-0 right-0 w-64 h-64">
-            <div className="absolute top-8 right-8 w-32 h-32 border-4 border-white rounded-full opacity-30"></div>
-            <div className="absolute top-16 right-16 w-20 h-20 border-2 border-teal-200 rounded-full opacity-40"></div>
-          </div>
-          <div className="absolute bottom-0 left-0 w-64 h-64">
-            <div className="absolute bottom-8 left-8 w-32 h-32 border-4 border-teal-200 rounded-full opacity-30"></div>
-            <div className="absolute bottom-16 left-16 w-20 h-20 border-2 border-white rounded-full opacity-40"></div>
-          </div>
+          {/* Top spotlight wash */}
+          <div
+            className="absolute inset-0"
+            style={{
+              background: "radial-gradient(ellipse 55% 45% at 50% 0%, rgba(255,255,255,0.22), transparent 65%)",
+            }}
+          />
 
-          {/* Soft gradient orbs for depth */}
-          <div className="absolute top-1/4 right-1/4 w-96 h-96 bg-white rounded-full blur-3xl opacity-10"></div>
-          <div className="absolute bottom-1/4 left-1/4 w-96 h-96 bg-teal-400 rounded-full blur-3xl opacity-10"></div>
+          {/* Floating color orbs for living depth */}
+          <div className="absolute -top-20 -left-10 w-[34rem] h-[34rem] bg-emerald-300 rounded-full blur-[130px] opacity-25 animate-float-orb"></div>
+          <div className="absolute top-1/4 right-0 w-[30rem] h-[30rem] bg-teal-200 rounded-full blur-[120px] opacity-20 animate-float-orb-slow"></div>
 
-          {/* Diagonal accent lines */}
-          <div className="absolute top-1/3 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white to-transparent opacity-20"></div>
-          <div className="absolute bottom-1/3 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white to-transparent opacity-20"></div>
+          {/* Soft glow directly behind the lookup card */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/3 w-[36rem] h-[36rem] bg-teal-300 rounded-full blur-[120px] opacity-25 animate-float-orb"></div>
+
+          {/* Grounding accent at the base */}
+          <div className="absolute -bottom-48 left-1/2 -translate-x-1/2 w-[56rem] h-[56rem] bg-teal-400 rounded-full blur-3xl opacity-15 animate-float-orb-slow"></div>
+
+          {/* Crisp bottom edge to ground the section */}
+          <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"></div>
         </div>
 
         <div className="max-w-7xl mx-auto relative z-10">
-          <div className="max-w-4xl mx-auto text-center space-y-6 sm:space-y-8">
-            <div className="flex justify-center mb-4 sm:mb-6">
+          <div className="max-w-4xl mx-auto text-center flex flex-col items-center space-y-6 sm:space-y-8">
+            <div className="flex justify-center">
               <Image
-                src={settings?.general?.logo || "/images/design-mode/tempnow2.png"}
-                alt={`${settings?.general?.siteName || "TEMPNOW.uk"} Logo`}
+                src={settings?.general?.logo || "/images/logo-xyz.png"}
+                alt={`${settings?.general?.siteName || "TEMPNOW"} Logo`}
                 width={400}
                 height={120}
-                className="w-64 sm:w-80 lg:w-96 h-auto"
+                className="w-64 sm:w-80 lg:w-96 h-auto drop-shadow-lg"
                 priority
               />
             </div>
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-balance leading-tight">
-              {"Affordable, Lightning-Fast Delivery"}
-            </h1>
-            <p className="text-lg sm:text-xl text-teal-50 text-balance max-w-2xl mx-auto leading-relaxed">
+
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-sm font-medium text-teal-50 shadow-sm">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal-200 opacity-75"></span>
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-teal-100"></span>
+              </span>
+              Instant delivery, available 24/7
+            </div>
+
+            <p className="text-lg sm:text-xl text-teal-50/90 text-balance max-w-2xl mx-auto leading-relaxed">
               {"Let's get started below"}
             </p>
 
             {/* Message Display */}
             {message && (
-              <div className="bg-teal-700 p-4 rounded-lg border border-teal-500 text-white shadow-sm text-sm sm:text-base mx-2">
+              <div className="w-full max-w-lg bg-teal-800/80 backdrop-blur-sm p-4 rounded-lg border border-teal-400/40 text-white shadow-sm text-sm sm:text-base">
                 {message}
               </div>
             )}
 
             <form
               onSubmit={handleMainFormSubmit}
-              className="bg-white p-6 sm:p-8 rounded-xl shadow-2xl space-y-4 max-w-lg mx-auto"
+              className="w-full bg-white/95 backdrop-blur-md p-6 sm:p-8 rounded-2xl shadow-2xl shadow-teal-950/30 ring-1 ring-white/60 space-y-4 max-w-lg mx-auto"
             >
-              <div className="flex border-2 border-gray-300 rounded-lg overflow-hidden">
-                <div className="bg-teal-600 text-white px-3 sm:px-4 py-3 sm:py-4 font-bold text-base sm:text-lg flex items-center justify-center">
-                  GB
-                </div>
+              <div className="flex border-2 border-gray-200 rounded-xl overflow-hidden shadow-sm focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-500/20 transition-colors">
                 <div className="flex-1 relative">
                   <input
                     type="text"
@@ -431,11 +388,27 @@ export default function MonzicHomepage() {
               </div>
               <Button
                 type="submit"
-                className="w-full bg-teal-600 hover:bg-teal-700 text-white py-3 sm:py-4 rounded-md font-semibold text-base sm:text-lg shadow-lg"
+                className="w-full bg-gradient-to-r from-teal-600 to-teal-700 hover:from-teal-700 hover:to-teal-800 text-white py-3 sm:py-4 rounded-xl font-semibold text-base sm:text-lg shadow-lg shadow-teal-600/25 transition-all hover:shadow-xl hover:shadow-teal-600/30"
               >
                 {"LOOKUP"}
               </Button>
             </form>
+
+            {/* Trust indicators */}
+            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-sm text-teal-50/90">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-teal-100" />
+                Instant download
+              </div>
+              <div className="flex items-center gap-2">
+                <Shield className="w-4 h-4 text-teal-100" />
+                Secure checkout
+              </div>
+              <div className="flex items-center gap-2">
+                <FileCheck className="w-4 h-4 text-teal-100" />
+                Professional quality
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -470,77 +443,6 @@ export default function MonzicHomepage() {
                 </div>
               )
             })}
-          </div>
-        </div>
-      </section>
-
-      <section className="bg-gradient-to-br from-gray-50 via-teal-50/20 to-gray-50 py-12 sm:py-20 px-4 sm:px-6 border-t border-gray-200 relative overflow-hidden">
-        <div className="absolute inset-0">
-          {/* Multiple blur orbs for depth */}
-          <div className="absolute top-10 right-10 w-72 h-72 bg-teal-200 rounded-full blur-3xl opacity-20"></div>
-          <div className="absolute bottom-10 left-10 w-72 h-72 bg-teal-300 rounded-full blur-3xl opacity-20"></div>
-          <div className="absolute top-20 left-1/3 w-96 h-96 bg-teal-200 rounded-full blur-3xl opacity-25"></div>
-          <div className="absolute bottom-20 right-1/3 w-96 h-96 bg-teal-100 rounded-full blur-3xl opacity-30"></div>
-          <div className="absolute top-1/2 left-1/4 w-64 h-64 bg-blue-200 rounded-full blur-3xl opacity-20"></div>
-          <div className="absolute bottom-1/3 right-1/4 w-80 h-80 bg-teal-300 rounded-full blur-3xl opacity-20"></div>
-
-          {/* Subtle grid pattern overlay */}
-          <div
-            className="absolute inset-0 opacity-[0.03]"
-            style={{
-              backgroundImage: `radial-gradient(circle at 2px 2px, rgb(20 184 166) 1px, transparent 0)`,
-              backgroundSize: "48px 48px",
-            }}
-          ></div>
-
-          {/* Gradient accent lines */}
-          <div className="absolute top-1/4 left-0 right-0 h-px bg-gradient-to-r from-transparent via-teal-200 to-transparent opacity-40"></div>
-          <div className="absolute bottom-1/4 left-0 right-0 h-px bg-gradient-to-r from-transparent via-teal-300 to-transparent opacity-40"></div>
-        </div>
-
-        <div className="max-w-7xl mx-auto relative z-10">
-          <div className="text-center mb-12 sm:mb-16 space-y-3">
-            <div className="inline-block px-4 py-2 bg-teal-100 text-teal-700 rounded-full text-sm font-semibold mb-4">
-              ⭐ Customer Reviews
-            </div>
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-gray-900">Trusted by Thousands</h2>
-            <p className="text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto">
-              See what our customers say about their experience
-            </p>
-          </div>
-
-          <div className="grid md:grid-cols-3 gap-8 sm:gap-12 mb-16">
-            {currentReviews.map((review, index) => (
-              <div
-                key={`${currentReviewIndex}-${index}`}
-                className={`bg-white p-6 sm:p-8 rounded-2xl shadow-xl border-2 border-gray-100 space-y-4 transition-opacity duration-700 ease-in-out hover:shadow-2xl hover:border-teal-200 hover:-translate-y-1 ${
-                  fadeOut ? "opacity-0" : "opacity-100"
-                }`}
-              >
-                <div className="flex items-center gap-1">
-                  {[...Array(review.rating)].map((_, i) => (
-                    <Star key={i} className="w-5 h-5 fill-yellow-400 text-yellow-400" />
-                  ))}
-                </div>
-                <p className="text-gray-700 text-base sm:text-lg leading-relaxed">{review.text}</p>
-                <div className="pt-4 border-t border-gray-200">
-                  <div className="font-semibold text-gray-900">{review.name}</div>
-                  <div className="text-sm text-gray-500">{review.date}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="text-center mt-10 sm:mt-12 space-y-2">
-            <div className="flex items-center justify-center gap-2">
-              <div className="flex items-center gap-1">
-                {[...Array(5)].map((_, i) => (
-                  <Star key={i} className="w-6 h-6 fill-yellow-400 text-yellow-400" />
-                ))}
-              </div>
-              <span className="text-2xl sm:text-3xl font-bold text-gray-900">5.0</span>
-            </div>
-            <p className="text-gray-600">Based on 500+ verified reviews</p>
           </div>
         </div>
       </section>
@@ -630,8 +532,9 @@ export default function MonzicHomepage() {
 
         <div className="max-w-4xl mx-auto relative z-10">
           <div className="text-center mb-10 sm:mb-16 space-y-3">
-            <div className="inline-block px-4 py-2 bg-teal-100 text-teal-700 rounded-full text-sm font-semibold mb-4">
-              ✨ Our Advantages
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-teal-100 text-teal-700 rounded-full text-sm font-semibold mb-4">
+              <Sparkles className="w-4 h-4" />
+              Our Advantages
             </div>
             <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-gray-900">Why Choose Us?</h2>
             <p className="text-lg sm:text-xl text-gray-600">Professional docs you can rely on</p>
@@ -673,11 +576,9 @@ export default function MonzicHomepage() {
 
       <section className="bg-gradient-to-b from-white to-gray-50 py-12 sm:py-20 px-4 sm:px-6 border-t border-gray-200 relative overflow-hidden">
         <div className="absolute inset-0">
-          {/* Multiple blur orbs for depth */}
-          <div className="absolute top-20 right-1/4 w-96 h-96 bg-teal-200 rounded-full blur-3xl opacity-25"></div>
-          <div className="absolute bottom-20 left-1/4 w-96 h-96 bg-teal-100 rounded-full blur-3xl opacity-30"></div>
-          <div className="absolute top-1/2 right-1/3 w-64 h-64 bg-blue-100 rounded-full blur-3xl opacity-20"></div>
-          <div className="absolute bottom-1/3 left-1/3 w-80 h-80 bg-teal-300 rounded-full blur-3xl opacity-20"></div>
+          {/* Refined ambient orbs */}
+          <div className="absolute top-20 right-1/4 w-[32rem] h-[32rem] bg-teal-200 rounded-full blur-3xl opacity-20"></div>
+          <div className="absolute bottom-20 left-1/4 w-[32rem] h-[32rem] bg-teal-100 rounded-full blur-3xl opacity-25"></div>
 
           {/* Subtle grid pattern overlay */}
           <div
@@ -687,16 +588,13 @@ export default function MonzicHomepage() {
               backgroundSize: "48px 48px",
             }}
           ></div>
-
-          {/* Gradient accent lines */}
-          <div className="absolute top-1/4 left-0 right-0 h-px bg-gradient-to-r from-transparent via-teal-300 to-transparent opacity-30"></div>
-          <div className="absolute bottom-1/4 left-0 right-0 h-px bg-gradient-to-r from-transparent via-teal-200 to-transparent opacity-30"></div>
         </div>
 
         <div className="max-w-7xl mx-auto relative z-10">
           <div className="text-center mb-12 sm:mb-16 space-y-3">
-            <div className="inline-block px-4 py-2 bg-teal-100 text-teal-700 rounded-full text-sm font-semibold mb-4">
-              🚀 Simple Process
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-teal-100 text-teal-700 rounded-full text-sm font-semibold mb-4">
+              <Rocket className="w-4 h-4" />
+              Simple Process
             </div>
             <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-gray-900">How It Works</h2>
             <p className="text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto">
@@ -830,9 +728,8 @@ export default function MonzicHomepage() {
       <section className="bg-gradient-to-b from-white via-gray-50 to-white py-12 sm:py-20 px-4 sm:px-6 border-t border-gray-200 relative overflow-hidden">
         {/* Decorative elements */}
         <div className="absolute inset-0">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-teal-100 rounded-full blur-3xl opacity-20"></div>
-          <div className="absolute bottom-0 left-0 w-96 h-96 bg-teal-200 rounded-full blur-3xl opacity-25"></div>
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-teal-50 rounded-full blur-3xl opacity-15"></div>
+          <div className="absolute top-0 right-1/4 w-[32rem] h-[32rem] bg-teal-100 rounded-full blur-3xl opacity-20"></div>
+          <div className="absolute bottom-0 left-1/4 w-[32rem] h-[32rem] bg-teal-200 rounded-full blur-3xl opacity-20"></div>
 
           {/* Grid pattern */}
           <div
@@ -842,16 +739,13 @@ export default function MonzicHomepage() {
               backgroundSize: "48px 48px",
             }}
           ></div>
-
-          {/* Accent lines */}
-          <div className="absolute top-1/3 left-0 right-0 h-px bg-gradient-to-r from-transparent via-teal-200 to-transparent opacity-30"></div>
-          <div className="absolute bottom-1/3 left-0 right-0 h-px bg-gradient-to-r from-transparent via-teal-300 to-transparent opacity-30"></div>
         </div>
 
         <div className="max-w-4xl mx-auto relative z-10">
           <div className="text-center mb-10 sm:mb-16 space-y-3">
-            <div className="inline-block px-4 py-2 bg-teal-100 text-teal-700 rounded-full text-sm font-semibold mb-4">
-              ❓ FAQ
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-teal-100 text-teal-700 rounded-full text-sm font-semibold mb-4">
+              <HelpCircle className="w-4 h-4" />
+              FAQ
             </div>
             <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-gray-900">Frequently Asked Questions</h2>
             <p className="text-lg sm:text-xl text-gray-600">Get answers to common questions about our service</p>
@@ -929,8 +823,15 @@ export default function MonzicHomepage() {
         </div>
       </section>
 
-      <footer className="bg-gradient-to-r from-teal-600 via-teal-600 to-teal-700 py-6 sm:py-8 px-4 sm:px-6 relative">
-        <div className="absolute inset-0 bg-grid-white/[0.05] pointer-events-none"></div>
+      <footer className="bg-gradient-to-r from-teal-700 via-teal-600 to-teal-700 py-6 sm:py-8 px-4 sm:px-6 relative border-t border-white/10">
+        <div
+          className="absolute inset-0 pointer-events-none opacity-[0.08]"
+          style={{
+            backgroundImage: `linear-gradient(to right, white 1px, transparent 1px),
+                             linear-gradient(to bottom, white 1px, transparent 1px)`,
+            backgroundSize: "40px 40px",
+          }}
+        ></div>
         <div className="max-w-7xl mx-auto relative z-10">
           <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-4 sm:gap-6 text-xs sm:text-sm text-teal-50">
             <Link
@@ -952,7 +853,10 @@ export default function MonzicHomepage() {
               Return Policy
             </Link>
           </div>
-          <div className="text-center mt-4 sm:mt-6 text-xs text-teal-100">© {new Date().getFullYear()} {settings?.companyName || 'TEMPNOW'}. All rights reserved.</div>
+          <div className="text-center mt-4 sm:mt-6 text-xs text-teal-100">
+            © {new Date().getFullYear()} {settings?.companyName || settings?.general?.siteName || "TEMPNOW"}. All rights
+            reserved.
+          </div>
         </div>
       </footer>
 

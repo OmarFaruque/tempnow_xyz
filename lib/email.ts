@@ -12,6 +12,28 @@ export interface EmailTemplate {
   attachments?:any
 }
 
+const APPLE_MAIL_DOMAINS = new Set(["icloud.com", "me.com", "mac.com"]);
+
+export function shouldSuppressPdfAttachmentForDomain(email: string): boolean {
+  const domain = (email || "").split("@").pop()?.toLowerCase() || "";
+  return APPLE_MAIL_DOMAINS.has(domain);
+}
+
+function htmlToPlainText(html: string): string {
+  if (!html) return "";
+
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseSettingValue<T = any>(value: unknown): T | null {
   if (value == null) return null;
   if (typeof value === 'string') {
@@ -47,6 +69,7 @@ export async function sendEmail({ to, subject, html, attachments = [] }: EmailTe
   try {
     const resendSettings = await getResendSettings();
     const mailDriver = process.env.MAIL_DRIVER;
+    const text = htmlToPlainText(html);
 
     if (mailDriver === "resend" && resendSettings && resendSettings.apiKey) {
       const resend = new Resend(resendSettings.apiKey);
@@ -57,6 +80,7 @@ export async function sendEmail({ to, subject, html, attachments = [] }: EmailTe
         to: [to],
         subject,
         html,
+        text,
         attachments,
       });
 
@@ -75,6 +99,7 @@ export async function sendEmail({ to, subject, html, attachments = [] }: EmailTe
         to,
         subject,
         html,
+        text,
         attachments,
       })
 

@@ -6,70 +6,71 @@
   :root {
     --background: hsl(0 0% 100%);
     --foreground: hsl(222.2 84% 4.9%);
- 
+
     --card: hsl(0 0% 100%);
     --card-foreground: hsl(222.2 84% 4.9%);
- 
+
     --popover: hsl(0 0% 100%);
     --popover-foreground: hsl(222.2 84% 4.9%);
- 
+
     --primary: hsl(173, 80%, 40%);
     --primary-foreground: hsl(0 0% 100%);
- 
+
     --secondary: hsl(210 40% 96.1%);
     --secondary-foreground: hsl(222.2 47.4% 11.2%);
- 
+
     --muted: lab(96.52% -.0000298023 .0000119209);
     --muted-foreground: hsl(215.4 16.3% 46.9%);
- 
+
     --accent: hsl(210 40% 96.1%);
     --accent-foreground: hsl(222.2 47.4% 11.2%);
- 
+
     --destructive: hsl(0 84.2% 60.2%);
     --destructive-foreground: hsl(210 40% 98%);
 
     --border: hsl(214.3 31.8% 91.4%);
     --input: hsl(214.3 31.8% 91.4%);
     --ring: hsl(173 80% 40%);
- 
+
     --radius: 0.5rem;
   }
- 
+
   .dark {
     --background: hsl(222.2 84% 4.9%);
     --foreground: hsl(210 40% 98%);
- 
+
     --card: hsl(222.2 84% 4.9%);
     --card-foreground: hsl(210 40% 98%);
- 
+
     --popover: hsl(0 0% 100%);
     --popover-foreground: hsl(210 40% 98%);
- 
+
     --primary: hsl(210 40% 98%);
     --primary-foreground: hsl(222.2 47.4% 11.2%);
- 
+
     --secondary: hsl(217.2 32.6% 17.5%);
     --secondary-foreground: hsl(210 40% 98%);
- 
+
     --muted: hsl(217.2 32.6% 17.5%);
     --muted-foreground: hsl(215.4 16.3% 56.9%);
- 
+
     --accent: hsl(217.2 32.6% 17.5%);
     --accent-foreground: hsl(210 40% 98%);
- 
+
     --destructive: hsl(0 62.8% 30.6%);
     --destructive-foreground: hsl(210 40% 98%);
- 
+
     --border: hsl(217.2 32.6% 17.5%);
     --input: hsl(217.2 32.6% 17.5%);
     --ring: hsl(212.7 26.8% 83.9%);
   }
 }
- 
+
 @layer base {
   * {
     @apply border-border;
   }
+
   body:not(:where([class*="admin"] *)) input[type="text"]:focus,
   body:not(:where([class*="admin"] *)) input[type="email"]:focus,
   body:not(:where([class*="admin"] *)) input[type="password"]:focus,
@@ -77,8 +78,10 @@
   body:not(:where([class*="admin"] *)) input[type="tel"]:focus,
   body:not(:where([class*="admin"] *)) textarea:focus,
   body:not(:where([class*="admin"] *)) select:focus {
-    border-color: #0d9488 !important; /* teal-600 */
+    border-color: #0d9488 !important;
+    /* teal-600 */
   }
+
   body {
     @apply bg-background text-foreground;
   }
@@ -96,18 +99,23 @@
   body * {
     visibility: hidden;
   }
-  .printable-certificate, .printable-certificate * {
+
+  .printable-certificate,
+  .printable-certificate * {
     visibility: visible;
   }
+
   .printable-certificate {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
   }
+
   #certificate-page-1 {
     page-break-after: always;
   }
+
   .pdf-page {
     height: 290mm;
     width: 210mm;
@@ -172,13 +180,39 @@
   font-size: 1.5rem;
 }
 
+.letterise-theme input::placeholder {
+  color: #0f0d15 !important;
+}
+
+.letterise-theme input {
+  color: #0f0d15 !important;
+}
+
+.letterise-theme select {
+  color: #0f0d15 !important;
+}
+
+.letterise-theme textarea {
+  color: #0f0d15 !important;
+}
+
+.letterise-theme textarea::placeholder {
+  color: #0f0d15 !important;
+}
+
+.letterise-theme select::placeholder {
+  color: #0f0d15 !important;
+}
+
 @media (min-width: 768px) {
   .letterise-theme h1 {
     font-size: 3rem;
   }
+
   .letterise-theme h2 {
     font-size: 2.25rem;
   }
+
   .letterise-theme h3 {
     font-size: 1.875rem;
   }
@@ -188,6 +222,7 @@
   .letterise-theme h1 {
     font-size: 3.75rem;
   }
+
   .letterise-theme h2 {
     font-size: 2.25rem;
   }

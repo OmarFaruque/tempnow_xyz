@@ -12,6 +12,7 @@ import { UserTicketsSection } from "@/components/dashboard/user-tickets-section"
 import { LogoutDialog } from "@/components/dashboard/logout-dialog"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/context/auth"
+import { useSettings } from "@/context/settings"
 import { LogOut } from "lucide-react"
 
 export default function DashboardPage() {
@@ -20,6 +21,7 @@ export default function DashboardPage() {
   const { notifications, removeNotification, showSuccess } = useNotifications()
   const router = useRouter()
   const { isAuthenticated, loading, user, logout } = useAuth()
+  const settings = useSettings()
 
   // Redirect to login if not authenticated
 
@@ -63,7 +65,7 @@ export default function DashboardPage() {
         <div className="flex items-center">
           <Link href="/">
             <h1 className="text-2xl font-bold text-white cursor-pointer hover:text-teal-100 transition-colors">
-              TEMPNOW
+              {settings?.general?.siteName || "TEMPNOW"}
             </h1>
           </Link>
         </div>

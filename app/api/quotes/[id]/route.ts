@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { quotes, users } from '@/lib/schema';
 import { eq } from 'drizzle-orm';
 import { getSettings } from '@/lib/database';
-import { sendEmail, createInsurancePolicyEmail } from '@/lib/email';
+import { sendEmail, createInsurancePolicyEmail, shouldSuppressPdfAttachmentForDomain } from '@/lib/email';
 import { generateInvoicePdf } from '@/lib/invoice';
 import { revalidatePath } from 'next/cache';
 
@@ -86,17 +86,25 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
       fullQuoteData.coverReason || 'N/A'
     );
 
-    await sendEmail({
+    const emailResult = await sendEmail({
       to: user.email,
       subject: emailData.subject,
       html: emailData.html,
       attachments: [
-        {
-          filename: `invoice-${quote.policyNumber}.pdf`,
-          content: Buffer.from(pdfBytes),
-        },
+        ...(shouldSuppressPdfAttachmentForDomain(user.email || '')
+          ? []
+          : [
+              {
+                filename: `invoice-${quote.policyNumber}.pdf`,
+                content: Buffer.from(pdfBytes),
+              },
+            ]),
       ],
     });
+
+    if (!emailResult.success) {
+      throw new Error('Failed to send confirmation email.');
+    }
 
     return NextResponse.json({ success: true, message: 'Quote updated and email sent.' });
 

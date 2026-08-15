@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
               status: 'completed',
               paymentStatus: 'paid',
               paymentMethod: 'airwallex',
-              mailSent: true,
+              mailSent: false,
               paymentIntentId: paymentIntent.id,
               paymentDate: new Date(),
               updatedAt: new Date().toISOString(),

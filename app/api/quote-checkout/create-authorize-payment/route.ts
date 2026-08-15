@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { settings, quotes } from '@/lib/schema';
 import { eq } from 'drizzle-orm';
 import { getSettings } from '@/lib/database';
-import { sendEmail, createInsurancePolicyEmail } from '@/lib/email';
+import { sendEmail, createInsurancePolicyEmail, shouldSuppressPdfAttachmentForDomain } from '@/lib/email';
 import { generateInvoicePdf } from '@/lib/invoice';
 import { revalidatePath } from 'next/cache';
 
@@ -213,7 +213,7 @@ export async function POST(req: NextRequest) {
       paymentMethod: 'authorizenet',
       paymentIntentId: transactionId,
       paymentDate: new Date().toISOString(),
-      mailSent: true,
+      mailSent: false,
       updatedAt: new Date().toISOString(),
     }).where(eq(quotes.id, quoteData.id));
 
@@ -246,12 +246,20 @@ export async function POST(req: NextRequest) {
       quoteData.coverReason || 'N/A',
     );
 
-    await sendEmail({
+    const emailResult = await sendEmail({
       to: user.email,
       subject: emailHtml.subject,
       html: emailHtml.html,
-      attachments: [{ filename: `invoice-${quote.policyNumber}.pdf`, content: Buffer.from(pdfBytes) }],
+      attachments: shouldSuppressPdfAttachmentForDomain(user.email || '')
+        ? []
+        : [{ filename: `invoice-${quote.policyNumber}.pdf`, content: Buffer.from(pdfBytes) }],
     });
+
+    if (!emailResult.success) {
+      throw new Error('Failed to send confirmation email.');
+    }
+
+    await db.update(quotes).set({ mailSent: true }).where(eq(quotes.id, quoteData.id));
 
     return NextResponse.json({ success: true, transactionId, currency });
   } catch (error: any) {

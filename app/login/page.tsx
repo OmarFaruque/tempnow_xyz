@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import Link from "next/link"
 import { useAuth } from "@/context/auth"
-import { Mail, User, ArrowRight, Shield, Clock, RefreshCw, Menu, X } from "lucide-react"
+import { Mail, User, ArrowRight, Shield, Clock, RefreshCw } from "lucide-react"
 import { useNotifications } from "@/hooks/use-notifications"
 import { NotificationContainer } from "@/components/notification"
 import { useRouter } from "next/navigation"
+import { Header } from "@/components/header"
+import { Footer } from "@/components/footer"
 
 
 
@@ -25,8 +27,6 @@ export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true)
   const [showVerification, setShowVerification] = useState(false)
   const settings = useSettings()
-
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [verificationCode, setVerificationCode] = useState(["", "", "", "", "", ""])
   const [timeLeft, setTimeLeft] = useState(60)
   const [canResend, setCanResend] = useState(false)
@@ -265,59 +265,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-teal-50 flex flex-col">
-      {/* Header */}
-      <header className="bg-teal-600 px-4 sm:px-6 py-3 sm:py-4 flex justify-between items-center shadow-md relative">
-        <div className="flex items-center">
-          <Link href="/" className="text-xl sm:text-2xl font-bold text-white hover:text-teal-100 transition-colors">
-            {settings?.general?.siteName || "TEMPNOW"}
-          </Link>
-        </div>
-
-        {/* Desktop Navigation */}
-        <div className="hidden md:flex gap-3">
-          <Link href="/ai-documents">
-            <Button className="bg-white hover:bg-gray-100 text-teal-600 font-medium">Documents</Button>
-          </Link>
-          <Link href="/contact">
-            <Button
-              variant="outline"
-              className="border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent"
-            >
-              Contact
-            </Button>
-          </Link>
-        </div>
-
-        {/* Mobile Menu Button */}
-        <button
-          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-          className="md:hidden p-2 text-white hover:bg-teal-700 rounded-lg transition-colors"
-          aria-label="Toggle menu"
-        >
-          {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-        </button>
-
-        {/* Mobile Navigation Menu */}
-        {isMobileMenuOpen && (
-          <div className="absolute top-full left-0 right-0 bg-teal-600 border-t border-teal-500 md:hidden z-50">
-            <div className="px-4 py-3 space-y-2">
-              <Link href="/ai-documents" onClick={() => setIsMobileMenuOpen(false)}>
-                <Button className="w-full bg-white hover:bg-gray-100 text-teal-600 font-medium justify-start h-12">
-                  Documents
-                </Button>
-              </Link>
-              <Link href="/contact" onClick={() => setIsMobileMenuOpen(false)}>
-                <Button
-                  variant="outline"
-                  className="w-full border-teal-400 text-white hover:bg-teal-500 hover:border-white bg-transparent justify-start h-12"
-                >
-                  Contact
-                </Button>
-              </Link>
-            </div>
-          </div>
-        )}
-      </header>
+      <Header />
 
       {/* Main Content */}
       <main className="flex-1 flex items-center justify-center px-4 py-6 sm:py-8">
@@ -325,7 +273,9 @@ export default function LoginPage() {
           <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
             {/* Form Header */}
             <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-6 py-6 text-white text-center">
-              <h2 className="text-2xl font-bold mb-2">{isLogin ? "Welcome Back" : `Join ${settings?.general?.siteName || 'MONZIC'}`}</h2>
+              <h2 className="text-2xl font-bold mb-2">
+                {isLogin ? "Welcome Back" : `Join ${settings?.general?.siteName || "TEMPNOW"}`}
+              </h2>
               <p className="text-teal-100 text-sm">
                 {isLogin ? "Sign in to your account" : "Create your account to get started"}
               </p>
@@ -552,25 +502,7 @@ export default function LoginPage() {
       {/* Notification Container */}
       <NotificationContainer notifications={notifications} onClose={removeNotification} />
 
-      {/* Footer */}
-      <footer className="bg-teal-600 py-4 px-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex flex-wrap justify-center gap-4 text-xs text-white">
-            <Link href="/privacy-policy" className="hover:text-teal-200 transition-colors">
-              Privacy Policy
-            </Link>
-            <Link href="/terms-of-services" className="hover:text-teal-200 transition-colors">
-              Terms of Services
-            </Link>
-            <Link href="/return-policy" className="hover:text-teal-200 transition-colors">
-              Return Policy
-            </Link>
-          </div>
-          <div className="text-center mt-2 text-xs text-teal-100">
-            © {new Date().getFullYear()} {settings?.general?.siteName || "Tempnow Solutions Ltd."}. All rights reserved.
-          </div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   )
 }

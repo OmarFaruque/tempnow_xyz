@@ -8,8 +8,10 @@ import { Label } from "@/components/ui/label"
 import { Card } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import { useSettings } from "@/context/settings"
 
 export default function QuoteFormulaPage() {
+  const settings = useSettings()
   const [baseHourRate, setBaseHourRate] = useState("12.56")
   const [baseAdditionalHourRate, setBaseAdditionalHourRate] = useState("0.41")
   const [baseDayRate, setBaseDayRate] = useState("22.11")
@@ -141,7 +143,9 @@ export default function QuoteFormulaPage() {
     <div className="min-h-screen bg-muted">
       <header className="bg-primary px-6 py-4">
         <div className="mx-auto max-w-7xl">
-          <h1 className="text-lg font-bold tracking-wide text-primary-foreground">TEMPNOW</h1>
+          <h1 className="text-lg font-bold tracking-wide text-primary-foreground">
+            {settings?.general?.siteName || "TEMPNOW"}
+          </h1>
         </div>
       </header>
 

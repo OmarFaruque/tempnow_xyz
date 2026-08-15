@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { quotes, users, settings } from '@/lib/schema';
 import { eq } from 'drizzle-orm';
-import { sendEmail, createInsurancePolicyEmail } from '@/lib/email';
+import { sendEmail, createInsurancePolicyEmail, shouldSuppressPdfAttachmentForDomain } from '@/lib/email';
 import { generateInvoicePdf } from '@/lib/invoice';
 import { revalidatePath } from 'next/cache';
 
@@ -60,12 +60,18 @@ export async function POST(req: NextRequest) {
         fullQuoteData.coverReason || 'N/A'
     );
 
-    await sendEmail({
-        to: user.email,
-        subject: emailData.subject,
-        html: emailData.html,
-        attachments: [{ filename: `invoice-${quote.policyNumber}.pdf`, content: Buffer.from(pdfBytes) }],
+    const emailResult = await sendEmail({
+      to: user.email,
+      subject: emailData.subject,
+      html: emailData.html,
+      attachments: shouldSuppressPdfAttachmentForDomain(user.email || '')
+        ? []
+        : [{ filename: `invoice-${quote.policyNumber}.pdf`, content: Buffer.from(pdfBytes) }],
     });
+
+    if (!emailResult.success) {
+      throw new Error('Failed to send confirmation email');
+    }
 
     // 4. Mark email as sent
     await db.update(quotes).set({ mailSent: true }).where(eq(quotes.id, quoteId));

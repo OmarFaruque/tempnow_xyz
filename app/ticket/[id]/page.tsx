@@ -25,6 +25,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import Link from "next/link"
 import { Header } from "@/components/header"
+import { Footer } from "@/components/footer"
 import { useSettings } from "@/context/settings";
 import { useToast } from "@/hooks/use-toast";
 
@@ -228,26 +229,7 @@ export default function TicketPage({ params }: { params: { id: string } }) {
           </Card>
         </div>
 
-        {/* Footer */}
-        <footer className="bg-teal-600 py-4 sm:py-6 px-4 sm:px-6">
-          <div className="max-w-4xl mx-auto">
-            <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-4 sm:gap-6 text-xs sm:text-sm text-white">
-              <Link href="/privacy-policy" className="hover:text-teal-200 transition-colors text-center sm:text-left">
-                Privacy Policy
-              </Link>
-              <Link
-                href="/terms-of-services"
-                className="hover:text-teal-200 transition-colors text-center sm:text-left"
-              >
-                Terms of Services
-              </Link>
-              <Link href="/return-policy" className="hover:text-teal-200 transition-colors text-center sm:text-left">
-                Return Policy
-              </Link>
-            </div>
-            <div className="text-center mt-3 sm:mt-4 text-xs text-teal-100">© {new Date().getFullYear()} {settings?.general?.companyName || 'Mozero AI Ltd'}. All rights reserved.</div>
-          </div>
-        </footer>
+        <Footer />
       </div>
     )
   }
@@ -346,7 +328,8 @@ export default function TicketPage({ params }: { params: { id: string } }) {
                 Conversation History
               </CardTitle>
               <CardDescription>
-                You can reply to this conversation and our {settings?.general?.siteName} support team will be notified immediately.
+                You can reply to this conversation and our {settings?.general?.siteName || "TEMPNOW"} support team will
+                be notified immediately.
               </CardDescription>
             </CardHeader>
             <CardContent className="p-6">
@@ -357,11 +340,11 @@ export default function TicketPage({ params }: { params: { id: string } }) {
                     className={`flex ${message.sender === "admin" ? "justify-start" : "justify-end"}`}
                   >
                     <div
-                      className={`max-w-[85%] rounded-2xl p-4 shadow-sm ${`
+                      className={`max-w-[85%] rounded-2xl p-4 shadow-sm ${
                         message.sender === "admin"
                           ? "bg-gradient-to-br from-teal-50 to-teal-100 border border-teal-200"
                           : "bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200"
-                      `}`}
+                      }`}
                     >
                       <div className="flex justify-between items-center mb-3">
                         <div className="flex items-center gap-2">
@@ -413,8 +396,8 @@ export default function TicketPage({ params }: { params: { id: string } }) {
                 <Alert className="mb-6 bg-green-50 border-green-200 shadow-sm">
                   <CheckCircle className="h-4 w-4 text-green-600" />
                   <AlertDescription className="text-green-800">
-                    <strong>Message sent successfully!</strong> Our MONZIC support team will respond to your inquiry
-                    soon.
+                    <strong>Message sent successfully!</strong> Our {settings?.general?.siteName || "TEMPNOW"} support
+                    team will respond to your inquiry soon.
                   </AlertDescription>
                 </Alert>
               )}
@@ -519,23 +502,7 @@ export default function TicketPage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
-      {/* Footer */}
-      <footer className="bg-teal-600 py-4 sm:py-6 px-4 sm:px-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-4 sm:gap-6 text-xs sm:text-sm text-white">
-            <Link href="/privacy-policy" className="hover:text-teal-200 transition-colors text-center sm:text-left">
-              Privacy Policy
-            </Link>
-            <Link href="/terms-of-services" className="hover:text-teal-200 transition-colors text-center sm:text-left">
-              Terms of Services
-            </Link>
-            <Link href="/return-policy" className="hover:text-teal-200 transition-colors text-center sm:text-left">
-              Return Policy
-            </Link>
-          </div>
-          <div className="text-center mt-3 sm:mt-4 text-xs text-teal-100">© {new Date().getFullYear()} {settings?.general?.companyName || 'Mozero AI Ltd'}. All rights reserved.</div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   )
 }

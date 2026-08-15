@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Eye, EyeOff, Lock, Mail, Shield, AlertCircle, Loader2 } from "lucide-react"
 import { useAdminAuth } from "@/context/admin-auth"
+import { useSettings } from "@/context/settings"
 
 export default function AdminLoginPage() {
   const [email, setEmail] = useState("")
@@ -19,6 +20,7 @@ export default function AdminLoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
   const { adminLogin, isAdminAuthenticated, loading } = useAdminAuth()
+  const settings = useSettings()
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -71,7 +73,7 @@ export default function AdminLoginPage() {
           <div>
             <CardTitle className="text-2xl font-bold">Admin Access</CardTitle>
             <CardDescription className="text-blue-100">
-              Sign in to access the TEMPNOW administrator dashboard
+              Sign in to access the {settings?.general?.siteName || "TEMPNOW"} administrator dashboard
             </CardDescription>
           </div>
         </CardHeader>

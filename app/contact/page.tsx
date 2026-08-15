@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Clock, ShieldCheck, Shield } from "lucide-react"
 import { useState, useEffect } from "react"
-import { useSettings } from "@/context/settings"
 import { Header } from "@/components/header"
+import { Footer } from "@/components/footer"
 import { useToast } from "@/hooks/use-toast"
 
 export default function ContactPage() {
@@ -22,7 +22,6 @@ export default function ContactPage() {
   const [subject, setSubject] = useState("")
   const [message, setMessage] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const settings = useSettings()
   const { toast } = useToast()
   const [hasMounted, setHasMounted] = useState(false)
 
@@ -383,25 +382,7 @@ export default function ContactPage() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="bg-teal-600 py-4 sm:py-6 px-4 sm:px-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex flex-wrap justify-center gap-4 sm:gap-6 text-xs sm:text-sm text-white">
-            <Link href="/privacy-policy" className="hover:text-teal-200 transition-colors">
-              Privacy Policy
-            </Link>
-            <Link href="/terms-of-services" className="hover:text-teal-200 transition-colors">
-              Terms of Services
-            </Link>
-            <Link href="/return-policy" className="hover:text-teal-200 transition-colors">
-              Return Policy
-            </Link>
-          </div>
-          <div className="text-center mt-2 sm:mt-4 text-xs text-teal-100">
-            © {new Date().getFullYear()} {settings.companyName || "TEMPNOW"}. All rights reserved.
-          </div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   )
 }

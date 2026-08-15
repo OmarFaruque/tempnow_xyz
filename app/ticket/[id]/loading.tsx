@@ -12,10 +12,12 @@ export default async function TicketLoading() {
   const generalSettings = await db.query.settings.findFirst({
     where: eq(settings.param, 'general')
   });
-  let companyName = 'Mozero AI Ltd'; // Default fallback
+  let companyName = 'TEMPNOW';
+  let siteName = 'TEMPNOW';
   if (generalSettings && generalSettings.value) {
     const parsedSettings = JSON.parse(generalSettings.value);
-    companyName = parsedSettings.companyName || 'Mozero AI Ltd';
+    companyName = parsedSettings.companyName || 'TEMPNOW';
+    siteName = parsedSettings.siteName || parsedSettings.companyName || 'TEMPNOW';
   }
 
   return (
@@ -24,7 +26,7 @@ export default async function TicketLoading() {
       <header className="bg-teal-600 px-4 sm:px-6 py-3 sm:py-4 shadow-md">
         <div className="flex justify-between items-center max-w-6xl mx-auto">
           <Link href="/" className="text-2xl font-bold text-white hover:text-teal-100 transition-colors">
-            MONZIC
+            {siteName}
           </Link>
           <div className="flex items-center gap-3">
             <Button
