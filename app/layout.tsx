@@ -10,10 +10,45 @@ const inter = Inter({ subsets: ["latin"] })
 
 import { getSettings } from "@/lib/database"
 
-export const metadata: Metadata = {
-  title: process.env.APP_TITLE || "TEMPNOW",
-  description: process.env.APP_DESCRIPTION || "Temporary Email Service",
-  generator: process.env.APP_GENERATOR || "v0.dev",
+export async function generateMetadata(): Promise<Metadata> {
+  const generalSettings = (await getSettings("general")) || {}
+  const title = generalSettings.seoTitle || generalSettings.siteName || process.env.APP_TITLE || "TEMPNOW"
+  const description = generalSettings.seoDescription || process.env.APP_DESCRIPTION || "Document Generation Services"
+  const keywords = typeof generalSettings.seoKeywords === "string"
+    ? generalSettings.seoKeywords.split(",").map((keyword: string) => keyword.trim()).filter(Boolean)
+    : undefined
+  const siteDomain = generalSettings.seoCanonicalUrl || generalSettings.siteDomain || process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL
+  const metadataBase = siteDomain
+    ? new URL(siteDomain.startsWith("http") ? siteDomain : `https://${siteDomain}`)
+    : undefined
+  const socialImage = generalSettings.seoImage || undefined
+
+  return {
+    metadataBase,
+    title,
+    description,
+    keywords,
+    applicationName: title,
+    alternates: metadataBase ? { canonical: metadataBase } : undefined,
+    openGraph: {
+      type: "website",
+      title,
+      description,
+      url: metadataBase,
+      siteName: title,
+      images: socialImage ? [{ url: socialImage }] : undefined,
+    },
+    twitter: {
+      card: socialImage ? "summary_large_image" : "summary",
+      title,
+      description,
+      images: socialImage ? [socialImage] : undefined,
+    },
+    robots: {
+      index: generalSettings.seoIndex !== false,
+      follow: generalSettings.seoFollow !== false,
+    },
+  }
 }
 
 export default async function RootLayout({

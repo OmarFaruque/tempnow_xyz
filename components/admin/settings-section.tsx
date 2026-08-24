@@ -715,6 +715,13 @@ export function SettingsSection() {
       activeJurisdiction: "uk",
       logo: "",
       siteName: "MONZIC",
+      seoTitle: "",
+      seoDescription: "",
+      seoKeywords: "",
+      seoCanonicalUrl: "",
+      seoImage: "",
+      seoIndex: true,
+      seoFollow: true,
       supportEmail: "support@tempnow.uk",
       adminEmail: "admin@tempnow.uk",
       timezone: "Europe/London",
@@ -2974,6 +2981,85 @@ export function SettingsSection() {
               <CardDescription>Configure general application settings for UK and UAE (Dubai)</CardDescription>
             </CardHeader>
             <CardContent className="space-y-8">
+              <div className="border border-sky-200 rounded-xl overflow-hidden">
+                <div className="bg-sky-50 px-5 py-4 border-b border-sky-200">
+                  <h3 className="text-sm font-semibold text-sky-900">SEO &amp; Social Metadata</h3>
+                  <p className="text-xs text-sky-700 mt-1">
+                    Shared values used for every website variation, search result, and social preview.
+                  </p>
+                </div>
+                <div className="p-5 space-y-4 bg-white">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="seo-title">Page Title</Label>
+                      <Input
+                        id="seo-title"
+                        value={settings.general.seoTitle || ""}
+                        onChange={(e) => updateSetting("general", "seoTitle", e.target.value)}
+                        placeholder={settings.general.siteName || "Your application title"}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="seo-canonical-url">Canonical URL</Label>
+                      <Input
+                        id="seo-canonical-url"
+                        type="url"
+                        value={settings.general.seoCanonicalUrl || ""}
+                        onChange={(e) => updateSetting("general", "seoCanonicalUrl", e.target.value)}
+                        placeholder="https://example.com"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="seo-description">Meta Description</Label>
+                    <Textarea
+                      id="seo-description"
+                      rows={3}
+                      value={settings.general.seoDescription || ""}
+                      onChange={(e) => updateSetting("general", "seoDescription", e.target.value)}
+                      placeholder="A concise description of your application"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="seo-keywords">Keywords</Label>
+                      <Input
+                        id="seo-keywords"
+                        value={settings.general.seoKeywords || ""}
+                        onChange={(e) => updateSetting("general", "seoKeywords", e.target.value)}
+                        placeholder="temporary email, privacy, inbox"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="seo-image">Social Preview Image URL</Label>
+                      <Input
+                        id="seo-image"
+                        type="url"
+                        value={settings.general.seoImage || ""}
+                        onChange={(e) => updateSetting("general", "seoImage", e.target.value)}
+                        placeholder="https://example.com/social-image.jpg"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-6">
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={settings.general.seoIndex !== false}
+                        onCheckedChange={(checked) => updateSetting("general", "seoIndex", checked === true)}
+                      />
+                      Allow search indexing
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={settings.general.seoFollow !== false}
+                        onCheckedChange={(checked) => updateSetting("general", "seoFollow", checked === true)}
+                      />
+                      Allow search engines to follow links
+                    </label>
+                  </div>
+                </div>
+              </div>
+
               {/* Active Jurisdiction Selector */}
               <div className="p-4 bg-teal-50 border border-teal-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
