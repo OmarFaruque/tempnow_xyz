@@ -180,28 +180,21 @@
   font-size: 1.5rem;
 }
 
-.letterise-theme input::placeholder {
-  color: #0f0d15 !important;
-}
-
-.letterise-theme input {
-  color: #0f0d15 !important;
-}
-
-.letterise-theme select {
-  color: #0f0d15 !important;
-}
-
+.letterise-theme input,
+.letterise-theme select,
 .letterise-theme textarea {
-  color: #0f0d15 !important;
+  color: var(--foreground);
 }
 
+.letterise-theme input::placeholder,
+.letterise-theme select::placeholder,
 .letterise-theme textarea::placeholder {
-  color: #0f0d15 !important;
+  color: var(--muted-foreground);
 }
 
-.letterise-theme select::placeholder {
-  color: #0f0d15 !important;
+.letterise-theme select option {
+  background-color: var(--card);
+  color: var(--card-foreground);
 }
 
 @media (min-width: 768px) {

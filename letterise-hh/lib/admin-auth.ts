@@ -94,22 +94,41 @@ export async function getAdminSession(): Promise<AdminSession | null> {
   const cookieStore = await cookies()
   const token = cookieStore.get(ADMIN_COOKIE_NAME)?.value
 
-  if (!token) return null
+  if (token) {
+    try {
+      const { payload } = await jwtVerify(token, SECRET_KEY)
 
-  try {
-    const { payload } = await jwtVerify(token, SECRET_KEY)
+      if (payload.role === 'admin' && typeof payload.email === 'string') {
+        return {
+          email: payload.email,
+          role: 'admin',
+        }
+      }
+    } catch {
+      // Ignore error and fall back to adminAuthToken
+    }
+  }
 
-    if (payload.role !== 'admin' || typeof payload.email !== 'string') {
+  const mainToken = cookieStore.get('adminAuthToken')?.value
+  if (mainToken) {
+    try {
+      const mainSecret = new TextEncoder().encode(
+        process.env.ADMIN_JWT_SECRET || 'your-fallback-secret'
+      )
+      const { payload } = await jwtVerify(mainToken, mainSecret)
+
+      if (typeof payload.email === 'string') {
+        return {
+          email: payload.email,
+          role: 'admin',
+        }
+      }
+    } catch {
       return null
     }
-
-    return {
-      email: payload.email,
-      role: 'admin',
-    }
-  } catch {
-    return null
   }
+
+  return null
 }
 
 export async function deleteAdminSession() {
