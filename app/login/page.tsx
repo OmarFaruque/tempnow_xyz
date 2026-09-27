@@ -15,7 +15,6 @@ import { Header } from "@/components/header"
 import { Footer } from "@/components/footer"
 
 
-
 import { useSettings } from "@/context/settings"
 
 export default function LoginPage() {
@@ -85,7 +84,7 @@ export default function LoginPage() {
         return
       }
 
-       // --- REGISTRATION LOGIC ---
+      // --- REGISTRATION LOGIC ---
       if (!isLogin) {
         if (!formData.agreeToTerms) {
           showWarning("Terms Required", "Please agree to the Terms of Service and Privacy Policy.");
@@ -202,10 +201,10 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: userEmail, code }),
       });
-      
+
       const data = await response.json();
 
-      
+
 
       if (!response.ok) {
         showError("Verification Failed", "An unknown error occurred.");
@@ -353,7 +352,7 @@ export default function LoginPage() {
                   </div>
                 )}
 
-                
+
 
                 {/* Terms agreement for signup */}
                 {!isLogin && (
