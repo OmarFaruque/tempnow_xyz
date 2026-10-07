@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import type { CheckoutQuote } from '@/features/insurance/types';
 import DOMPurify from 'dompurify';
 import { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
@@ -20,6 +21,17 @@ import { useQuoteExpiration } from '@/hooks/use-quote-expiration.tsx';
 import Cookies from 'js-cookie';
 // import styles from './checkout.module.css';
 import { Label } from '@/components/ui/label';
+import { getGatewayDisplayName, type PaymentGatewayId } from '@/core/payment-gateways';
+
+type PublicGatewayAttempt = {
+  id: string;
+  checkoutId: string;
+  product: 'quote' | 'doc-forge';
+  provider: PaymentGatewayId;
+  attemptNumber: number;
+  maxAttempts: number;
+  status: 'reserved' | 'pending' | 'failed' | 'succeeded' | 'expired';
+};
 
 type AuthorizeNetOpaqueData = {
   dataDescriptor: string;
@@ -47,7 +59,7 @@ const SquareGooglePay = dynamic(() => import('react-square-web-payments-sdk').th
 const SquareApplePay = dynamic(() => import('react-square-web-payments-sdk').then(mod => mod.ApplePay), { ssr: false });
 
 
-const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingChange, flp_checksum }, ref) => {
+const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingChange, flp_checksum, gatewayAttemptId, onGatewayFailure }, ref) => {
   const stripe = useStripe();
   const elements = useElements();
   const { toast } = useToast();
@@ -55,11 +67,12 @@ const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingCh
   React.useImperativeHandle(ref, () => ({
     async handlePayment() {
       if (!stripe || !elements) {
-        toast({ variant: "destructive", title: "Payment Error", description: "Stripe is not available." });
-        onProcessingChange(false);
+        if (onGatewayFailure) await onGatewayFailure('stripe_unavailable');
+        else onProcessingChange(false);
         return;
       }
       onProcessingChange(true);
+      let doNotRotate = false;
       try {
 
         // Create the Radar Session
@@ -72,11 +85,21 @@ const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingCh
             quoteData: { ...quoteData, id: quote.id, total: quoteData?.total },
             user: user,
             flp_checksum: flp_checksum,
-            radar_session_id: radarSession.id, // Send session ID to backend
+            radar_session_id: radarSession.id,
+            gatewayAttemptId
           }),
         });
-        const { clientSecret, error: clientSecretError } = await response.json();
-        if (clientSecretError) throw new Error(clientSecretError.message || "Could not initiate Stripe payment.");
+
+        const initialization = await response.json();
+        if (!response.ok || !initialization.clientSecret) {
+          if (response.status === 403) doNotRotate = true;
+          if (response.status !== 403 && onGatewayFailure) {
+            await onGatewayFailure('stripe_initialization_failed');
+            return;
+          }
+          throw new Error(initialization.details || initialization.error || "Could not initiate Stripe payment.");
+        }
+        const clientSecret = initialization.clientSecret;
 
         const cardNumberElement = elements.getElement(CardNumberElement);
         if (!cardNumberElement) throw new Error("Card element not found.");
@@ -84,13 +107,29 @@ const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingCh
         const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
           payment_method: { card: cardNumberElement },
         });
-        if (error) throw error;
+        if (error) {
+          if (onGatewayFailure) {
+            await onGatewayFailure(error.code || error.decline_code || 'stripe_payment_failed');
+            return;
+          }
+          throw error;
+        }
         if (paymentIntent.status === "succeeded") {
           toast({ title: "Payment Successful", description: "Your payment has been processed." });
           localStorage.removeItem('quoteCreationTimestamp');
-          window.location.href = "/payment-confirmation";
+          window.location.href = `/payment-confirmation?gatewayAttemptId=${encodeURIComponent(gatewayAttemptId || '')}`;
+          return;
         }
+        if (onGatewayFailure) {
+          await onGatewayFailure(`stripe_${paymentIntent?.status || 'payment_incomplete'}`);
+          return;
+        }
+        throw new Error(`Payment was not completed (${paymentIntent?.status || 'unknown status'}). Please try again.`);
       } catch (error: any) {
+        if (!doNotRotate && onGatewayFailure && error?.message !== 'Card element not found.') {
+          await onGatewayFailure(error?.code || 'stripe_payment_failed');
+          return;
+        }
         toast({ variant: "destructive", title: "Payment Error", description: error.message });
         onProcessingChange(false);
       }
@@ -128,7 +167,7 @@ const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingCh
 StripePayment.displayName = 'StripePayment';
 
 
-const AuthorizeNetPayment = React.forwardRef(({ quoteData, user, quote, onProcessingChange, flp_checksum, settings }, ref) => {
+const AuthorizeNetPayment = React.forwardRef(({ quoteData, user, quote, onProcessingChange, flp_checksum, settings, gatewayAttemptId, onGatewayFailure }, ref) => {
   const { toast } = useToast();
   const [cardNumber, setCardNumber] = useState('');
   const [expiryMonth, setExpiryMonth] = useState('');
@@ -222,7 +261,7 @@ const AuthorizeNetPayment = React.forwardRef(({ quoteData, user, quote, onProces
 
         toast({ title: 'Payment Successful', description: 'Your payment has been processed.' });
         localStorage.removeItem('quoteCreationTimestamp');
-        window.location.href = '/payment-confirmation';
+        window.location.href = `/payment-confirmation?gatewayAttemptId=${encodeURIComponent(gatewayAttemptId || '')}`;
       } catch (error: any) {
         toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
         onProcessingChange(false);
@@ -411,14 +450,29 @@ const StripeApplePayButton = ({ quoteData, user, quote, onProcessingChange, allT
   return null;
 };
 
-const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_checksum, settings, quote }) => {
-  const { paddle, loading: isPaddleLoading } = usePaddle();
+const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_checksum, settings, quote, gatewayAttemptId, onGatewayFailure }) => {
+  const { paddle, loading: isPaddleLoading, error: paddleError, reload: reloadPaddle } = usePaddle();
   const { toast } = useToast();
   const [isProcessing, setIsProcessing] = useState(false);
+  const failureReportedFor = useRef<string | null>(null);
+
+  // Paddle could not be started (settings unreachable, token missing, SDK
+  // blocked). Hand the checkout to the next provider instead of leaving the
+  // customer on a button that spins on "Processing..." forever.
+  useEffect(() => {
+    if (!paddleError) return;
+    const attemptKey = gatewayAttemptId || 'unattributed';
+    if (failureReportedFor.current === attemptKey) return;
+    failureReportedFor.current = attemptKey;
+    void onGatewayFailure?.('paddle_checkout_unavailable');
+  }, [paddleError, gatewayAttemptId, onGatewayFailure]);
+
 
   const handlePaddlePayment = async () => {
     if (!paddle) {
-      toast({ variant: "destructive", title: "Payment Error", description: "Paddle is not available." });
+      // Still initialising: the effect above rotates once it reports an error.
+      if (!paddleError) return;
+      await onGatewayFailure?.('paddle_checkout_unavailable');
       return;
     }
     setIsProcessing(true);
@@ -430,6 +484,8 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
           quoteData: { ...quoteData, id: quote.id, policyNumber: quote.policyNumber, total: discountedTotal },
           user: user,
           flp_checksum: flp_checksum,
+          gatewayAttemptId,
+          checkoutId: `quote:${quote.id}`,
         }),
       });
       const data = await response.json();
@@ -459,7 +515,7 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
   );
 };
 
-const VivaCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_checksum, settings, quote }) => {
+const VivaCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_checksum, settings, quote, gatewayAttemptId }) => {
   const { toast } = useToast();
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -473,6 +529,8 @@ const VivaCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_ch
           quoteData: { ...quoteData, id: quote.id, policyNumber: quote.policyNumber, total: discountedTotal },
           user: user,
           flp_checksum: flp_checksum,
+          gatewayAttemptId,
+          checkoutId: `quote:${quote.id}`,
         }),
       });
       const data = await response.json();
@@ -510,13 +568,20 @@ function QuoteCheckoutPage() {
   const { toast } = useToast();
   const router = useRouter();
   const settings = useSettings();
-  const [quoteData, setQuoteData] = useState<QuoteData | null>(null);
+  const [quoteData, setQuoteData] = useState<CheckoutQuote | null>(null);
   const [quote, setQuote] = useState<any>({});
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string | null>(null);
   const [paymentView, setPaymentView] = useState<"selection" | "card-details" | "bank-details">("selection");
   const [checkboxContent, setCheckboxContent] = useState<string[]>([]);
   const [checkboxStates, setCheckboxStates] = useState<boolean[]>([]);
+
+  const [gatewayAttempt, setGatewayAttempt] = useState<PublicGatewayAttempt | null>(null);
+  const [gatewayLoading, setGatewayLoading] = useState(true);
+  const [gatewayUnavailable, setGatewayUnavailable] = useState(false);
+  const [rotationNotice, setRotationNotice] = useState<string | null>(null);
+  const [routingAttemptKey, setRoutingAttemptKey] = useState(0);
+  const routingStartedFor = useRef<string | null>(null);
   const flp_checksum = Cookies.get('flp_checksum');
 
 
@@ -537,15 +602,15 @@ function QuoteCheckoutPage() {
 
   const paymentMethods = [];
   if (paymentProvider) {
-    let providerTitle = paymentProvider.charAt(0).toUpperCase() + paymentProvider.slice(1);
-    let providerDescription = 'Securely pay with your card.';
-    if (paymentProvider === 'square') {
-      providerDescription = 'Pay with Card, Google Pay, or Apple Pay.';
-    }
+    const providerDescription = paymentProvider === 'square'
+      ? 'Pay with card, Google Pay, or Apple Pay.'
+      : ['mollie', 'paypal', 'checkoutcom', 'lemonsqueezy', 'paddle', 'viva'].includes(paymentProvider)
+        ? `Continue to ${getGatewayDisplayName(paymentProvider)}’s secure checkout.`
+        : `Secure card processing by ${getGatewayDisplayName(paymentProvider)}.`;
     paymentMethods.push({
       id: paymentProvider,
-      title: `Credit or Debit Card`,
-      description: 'Visa, Mastercard, Amex accepted',
+      title: `Credit or Debit Card · ${getGatewayDisplayName(paymentProvider)}`,
+      description: providerDescription,
       icon: <CreditCard className="h-5 w-5 text-muted-foreground" />,
       type: 'card'
     });
@@ -595,12 +660,80 @@ function QuoteCheckoutPage() {
     }
   }, [isAuthenticated, authLoading, router, settings, toast]);
 
+
+  // Load payment provider routing basis
+  useEffect(() => {
+    const checkoutQuoteId = quote?.id || quoteData?.id;
+    if (!checkoutQuoteId || !user?.id) {
+      if (!authLoading) {
+        setGatewayLoading(false);
+      }
+      return;
+    }
+    const checkoutId = `quote:${checkoutQuoteId}`;
+    if (routingStartedFor.current === checkoutId) return;
+    routingStartedFor.current = checkoutId;
+
+    const initializeGateway = async () => {
+      setGatewayLoading(true);
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const incomingAttemptId = params.get('gatewayAttemptId');
+        if (incomingAttemptId) {
+          const response = await fetch(`/api/payment-routing?attemptId=${encodeURIComponent(incomingAttemptId)}`, { cache: 'no-store' });
+          const data = await response.json();
+          if (!response.ok || !data.success || data.attempt?.product !== 'quote' || data.attempt?.checkoutId !== checkoutId || !['reserved', 'pending'].includes(data.attempt?.status)) {
+            throw new Error(data.error || 'The alternate payment option could not be loaded.');
+          }
+          const attempt = data.attempt as PublicGatewayAttempt;
+          setGatewayAttempt(attempt);
+          setSelectedPaymentMethod(attempt.provider);
+          if (params.get('gatewayRetry') === '1') {
+            setPaymentView('card-details');
+            setRotationNotice('Something went wrong, please try again. Re-enter your card details to continue securely with the next provider.');
+          }
+          return;
+        }
+
+        const response = await fetch('/api/payment-routing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'allocate',
+            checkoutId,
+            product: 'quote',
+            user: { id: user.id, email: user.email },
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          setGatewayUnavailable(true);
+          setRotationNotice(data.error || 'Online payment is temporarily unavailable.');
+          return;
+        }
+        const attempt = data.attempt as PublicGatewayAttempt;
+        setGatewayAttempt(attempt);
+        setSelectedPaymentMethod(attempt.provider);
+        setGatewayUnavailable(false);
+      } catch (error) {
+        console.error('Payment gateway allocation failed:', error);
+        setGatewayUnavailable(true);
+        setRotationNotice(error instanceof Error ? error.message : 'Online payment is temporarily unavailable.');
+      } finally {
+        setGatewayLoading(false);
+      }
+    };
+
+    void initializeGateway();
+  }, [quoteData?.id, quote?.id, user?.id, user?.email, authLoading, routingAttemptKey]);
+
   useEffect(() => {
     if (selectedPaymentMethod === 'airwallex' && isAuthenticated && quoteData) {
       const initAirwallex = async () => {
+        let doNotRotate = false;
         try {
           const Airwallex = (await import('airwallex-payment-elements')).default;
-          await Airwallex.loadAirwallex({ env: 'demo' });
+          await Airwallex.loadAirwallex({ env: settings?.airwallex?.environment === 'test' ? 'demo' : 'prod' });
           const response = await fetch('/api/quote-checkout/create-airwallex-payment', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -608,9 +741,17 @@ function QuoteCheckoutPage() {
               quoteData: { ...quoteData, total: quoteData?.total },
               user: user,
               flp_checksum: flp_checksum,
+              gatewayAttemptId: gatewayAttempt?.id,
+              checkoutId: `quote:${quote.id}`,
             }),
           });
-          const { clientSecret, intentId } = await response.json();
+          const intent = await response.json();
+          const { clientSecret, intentId } = intent;
+          if (!response.ok || !clientSecret || !intentId) {
+            if (response.status === 403) doNotRotate = true;
+            throw new Error(intent.error || 'Airwallex checkout could not be initialized.');
+          }
+          if (!airwallexCardRef.current) throw new Error('Payment form is not ready.');
           const cardElement = Airwallex.createElement('card', {
             intent: { id: intentId, client_secret: clientSecret },
           });
@@ -618,12 +759,71 @@ function QuoteCheckoutPage() {
           setAirwallexElement(cardElement);
         } catch (error) {
           console.error('Airwallex initialization failed:', error);
-          toast({ variant: 'destructive', title: 'Payment Error', description: 'Failed to initialize Airwallex.' });
+          if (!doNotRotate) {
+            await handleGatewayFailure('airwallex_initialization_failed');
+          } else {
+            toast({ variant: 'destructive', title: 'Payment Error', description: 'We could not authorize this checkout.' });
+          }
         }
       };
       initAirwallex();
     }
-  }, [selectedPaymentMethod, isAuthenticated, toast, quoteData, user]);
+  }, [selectedPaymentMethod, isAuthenticated, toast, quoteData, user, gatewayAttempt?.id, settings?.airwallex?.environment]);
+
+
+  const handleGatewayFailure = async (failureCode = 'payment_declined') => {
+    const failedAttemptId = gatewayAttempt?.id;
+    if (!failedAttemptId) {
+      setIsProcessingPayment(false);
+      toast({ variant: 'destructive', title: 'Payment Error', description: 'Something went wrong, please try again.' });
+      return;
+    }
+
+    setIsProcessingPayment(true);
+    try {
+      const response = await fetch('/api/payment-routing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'retry', attemptId: failedAttemptId, failureCode }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        setGatewayAttempt(null);
+        setSelectedPaymentMethod(null);
+        setPaymentView('selection');
+        setGatewayUnavailable(true);
+        setRotationNotice('Something went wrong, please try again. We could not find another secure payment option.');
+        toast({ variant: 'destructive', title: 'Payment not completed', description: 'Something went wrong, please try again. No further payment attempts were made.' });
+        return;
+      }
+
+      const nextAttempt = data.attempt as PublicGatewayAttempt;
+      setGatewayAttempt(nextAttempt);
+      setSelectedPaymentMethod(nextAttempt.provider);
+      setPaymentView('card-details');
+      setGatewayUnavailable(false);
+      setRotationNotice(`Something went wrong, please try again. Continue securely with ${getGatewayDisplayName(nextAttempt.provider)} and enter your card details again.`);
+      setAirwallexElement(null);
+    } catch (error) {
+      console.error('Could not switch payment gateways:', error);
+      setGatewayUnavailable(true);
+      setRotationNotice('Something went wrong, please try again. Your payment was not completed.');
+      toast({ variant: 'destructive', title: 'Payment not completed', description: 'Something went wrong, please try again.' });
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
+  const handleRetryGatewayRouting = () => {
+    routingStartedFor.current = null;
+    setGatewayAttempt(null);
+    setSelectedPaymentMethod(null);
+    setPaymentView('selection');
+    setGatewayUnavailable(false);
+    setRotationNotice(null);
+    setGatewayLoading(true);
+    setRoutingAttemptKey((key) => key + 1);
+  };
 
   const handleCheckboxChange = (index: number, checked: boolean) => {
     const newStates = [...checkboxStates];
@@ -648,6 +848,8 @@ function QuoteCheckoutPage() {
               quoteData: { ...quoteData, id: quote.id, policyNumber: quote.policyNumber, total: quoteData?.total },
               user: user,
               flp_checksum: flp_checksum,
+              gatewayAttemptId: gatewayAttempt?.id,
+              checkoutId: `quote:${quote.id}`,
             }),
           });
           const data = await response.json();
@@ -672,6 +874,8 @@ function QuoteCheckoutPage() {
               quoteData: { ...quoteData, id: quote.id, policyNumber: quote.policyNumber, total: quoteData?.total },
               user: user,
               flp_checksum: flp_checksum,
+              gatewayAttemptId: gatewayAttempt?.id,
+              checkoutId: `quote:${quote.id}`,
             }),
           });
           const data = await response.json();
@@ -966,6 +1170,15 @@ function QuoteCheckoutPage() {
                         </p>
                       )}
                     </div>
+                    {gatewayUnavailable && (
+                      <Button
+                        className="w-full bg-gradient-to-r from-yellow-500 to-yellow-600 font-semibold text-slate-950 hover:from-yellow-400 hover:to-yellow-500"
+                        onClick={handleRetryGatewayRouting}
+                      >
+                        <Loader2 className="mr-2 h-4 w-4" />
+                        Try Again
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       className="w-full"
@@ -1038,6 +1251,8 @@ function QuoteCheckoutPage() {
                           quote={quote}
                           onProcessingChange={setIsProcessingPayment}
                           flp_checksum={flp_checksum}
+                          gatewayAttemptId={gatewayAttempt?.id}
+                          onGatewayFailure={handleGatewayFailure}
                         />
                       </>
                     )}
@@ -1119,6 +1334,8 @@ function QuoteCheckoutPage() {
                         flp_checksum={flp_checksum}
                         settings={settings}
                         quote={quote}
+                        gatewayAttemptId={gatewayAttempt?.id}
+                        onGatewayFailure={handleGatewayFailure}
                       />
                     ) : selectedPaymentMethod === 'viva' ? (
                       <VivaCheckoutButton
@@ -1129,6 +1346,7 @@ function QuoteCheckoutPage() {
                         flp_checksum={flp_checksum}
                         settings={settings}
                         quote={quote}
+                        gatewayAttemptId={gatewayAttempt?.id}
                       />
                     ) : selectedPaymentMethod === 'lemonsqueezy' ? (
                       <Button

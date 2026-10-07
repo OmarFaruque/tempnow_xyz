@@ -16,27 +16,27 @@ export interface AdminUser {
 }
 
 export async function validateAdminCredentials(email: string, password_provided: string, clientIP: string) {
-    const { success, remaining } = adminLoginRateLimit.limit(clientIP);
-    if (!success) {
-        return { isValid: false, rateLimited: true, error: "Too many login attempts. Please try again later." };
-    }
+  const { success, remaining } = adminLoginRateLimit.limit(clientIP);
+  if (!success) {
+    return { isValid: false, rateLimited: true, error: "Too many login attempts. Please try again later." };
+  }
 
-    const adminUsers = await db.select().from(admins).where(eq(admins.email, email));
+  const adminUsers = await db.select().from(admins).where(eq(admins.email, email));
 
-    if (adminUsers.length === 0) {
-        return { isValid: false, error: "Invalid credentials" };
-    }
+  if (adminUsers.length === 0) {
+    return { isValid: false, error: "Invalid credentials" };
+  }
 
-    const adminUser = adminUsers[0];
-    const storedPassword = adminUser.password || "";
+  const adminUser = adminUsers[0];
+  const storedPassword = adminUser.password || "";
 
-    const isPasswordValid = await compare(password_provided, storedPassword);
+  const isPasswordValid = await compare(password_provided, storedPassword);
 
-    if (!isPasswordValid) {
-        return { isValid: false, error: "Invalid credentials" };
-    }
+  if (!isPasswordValid) {
+    return { isValid: false, error: "Invalid credentials" };
+  }
 
-    return { isValid: true, user: { id: adminUser.adminId, email: adminUser.email, role: adminUser.role } };
+  return { isValid: true, user: { id: adminUser.adminId, email: adminUser.email, role: adminUser.role } };
 }
 
 
@@ -47,8 +47,15 @@ export async function isAdmin(req: NextRequest): Promise<boolean> {
     return false;
   }
 
+  const rawSecret = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET || 'your-fallback-secret';
+  if (!rawSecret) {
+    // Fail closed: without a configured secret no operator token can be valid.
+    console.error('ADMIN_JWT_SECRET is not configured; operator verification denied.');
+    return false;
+  }
+
   try {
-    const secret = new TextEncoder().encode(process.env.ADMIN_JWT_SECRET || 'your-fallback-secret');
+    const secret = new TextEncoder().encode(rawSecret);
     await jwtVerify(token, secret);
     return true;
   } catch (error) {

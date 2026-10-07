@@ -26,7 +26,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
     // 1. Update the quote status in the database
     await db.update(quotes).set({
-      status:'completed',
+      status: 'completed',
       paymentStatus: 'paid',
       paymentMethod: PaymentMethod,
       paymentIntentId: PaymentIntentId,
@@ -94,15 +94,19 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
         ...(shouldSuppressPdfAttachmentForDomain(user.email || '')
           ? []
           : [
-              {
-                filename: `invoice-${quote.policyNumber}.pdf`,
-                content: Buffer.from(pdfBytes),
-              },
-            ]),
+            {
+              filename: `invoice-${quote.policyNumber}.pdf`,
+              content: Buffer.from(pdfBytes),
+            },
+          ]),
       ],
     });
 
-    if (!emailResult.success) {
+    if (emailResult.success) {
+      await db.update(quotes).set({
+        mailSent: true,
+      }).where(eq(quotes.id, quoteId));
+    } else {
       throw new Error('Failed to send confirmation email.');
     }
 

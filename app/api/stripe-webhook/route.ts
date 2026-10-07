@@ -1,138 +1,106 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { db } from '@/lib/db';
-import { quotes, users, aiDocuments, settings } from '@/lib/schema';
-import { eq } from 'drizzle-orm';
-import { sendEmail, createAIDocumentPurchaseEmail, createAdminNotificationEmail, getAdminEmail } from '@/lib/email';
-import { revalidatePath } from 'next/cache';
+import { getStripeCredentials, STRIPE_API_VERSION } from '@/core/stripe-credentials';
+import { processStripeEvent } from '@/features/documents/services/stripe-webhook-handler';
 
-import { v4 as uuidv4 } from 'uuid';
+/**
+ * The SINGLE Stripe webhook endpoint for the whole project.
+ *
+ * It handles the full event set the document-service webhook used to handle,
+ * plus quote/AI-document payment success:
+ *
+ *   - payment_intent.succeeded      (fulfil any successful payment)
+ *   - payment_intent.payment_failed (close the routed gateway attempt)
+ *   - checkout.session.completed    (doc-forge credit/subscription checkouts)
+ *   - customer.subscription.updated (subscription status/period sync)
+ *   - customer.subscription.deleted (cancellations)
+ *   - invoice.payment_succeeded     (subscription renewals)
+ *
+ * The order type is resolved by looking the Stripe payment id up in the
+ * database (quotes -> transactions -> subscription invoice),
+ * and every fulfilment is idempotent, so overlapping events for the same
+ * payment never double-grant. Unknown payments are ignored.
+ *
+ * IMPORTANT: the fulfilment is awaited *before* the response is sent.
+ * A fire-and-forget handler (the previous implementation) loses orders twice
+ * over: the runtime is free to drop work that outlives the response, and
+ * Stripe sees a `200` for a delivery that actually failed, so it never
+ * retries. Awaiting the (fast, database-only) fulfilment keeps every delivery
+ * either fully applied or explicitly retried by Stripe.
+ *
+ * The customer-facing fallback lives in `/api/checkout/verify-stripe`: the
+ * payment-result pages call it after returning from Stripe, so an order is
+ * still fulfilled even when no webhook delivery ever reaches this app.
+ */
 
-
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const secretKey = process.env.STRIPE_SECRET_KEY;
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const startedAt = Date.now();
+  const signature = req.headers.get('stripe-signature');
 
-  if (!secretKey || !webhookSecret) {
-    console.error('Stripe secretKey or webhookSecret is not set in environment variables.');
-    return NextResponse.json({ error: 'Stripe credentials not fully configured.' }, { status: 500 });
+  let body: string;
+  try {
+    body = await req.text();
+  } catch (error) {
+    // The sender closed the connection while the body was still being read
+    // (the `aborted` / ECONNRESET noise Next.js prints for local tunnels and
+    // the Stripe CLI). Nothing can be fulfilled - Stripe retries by itself.
+    console.error('Stripe webhook: request body was aborted before it could be read.', error);
+    return NextResponse.json({ error: 'Webhook Error: request aborted before the body was read.' }, { status: 400 });
   }
 
-  const stripe = new Stripe(secretKey, {
-    apiVersion: '2024-04-10',
-  });
-
-  const signature = req.headers.get('stripe-signature');
-  const body = await req.text();
-
-
   if (!body) {
-    console.error('Webhook Error: No body received.');
+    console.error('Stripe webhook: empty body received.', {
+      hasSignature: Boolean(signature),
+      contentLength: req.headers.get('content-length'),
+      userAgent: req.headers.get('user-agent'),
+      contentType: req.headers.get('content-type'),
+    });
     return NextResponse.json({ error: 'Webhook Error: No body received.' }, { status: 400 });
   }
 
-  let event: Stripe.Event;
+  if (!signature) {
+    console.error('Stripe webhook: the stripe-signature header is missing.');
+    return NextResponse.json({ error: 'Webhook Error: Missing stripe-signature header.' }, { status: 400 });
+  }
 
+  const credentials = await getStripeCredentials();
+
+  if (!credentials.secretKey || !credentials.webhookSecret) {
+    console.error(
+      'Stripe secretKey or webhookSecret is not configured (environment variable or Ops Hub payment settings).',
+    );
+    // 5xx so Stripe keeps retrying until the operator configures the keys.
+    return NextResponse.json({ error: 'Stripe credentials not fully configured.' }, { status: 500 });
+  }
+
+  const stripe = new Stripe(credentials.secretKey, {
+    apiVersion: STRIPE_API_VERSION,
+  });
+
+  let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(body, signature!, webhookSecret);
+    event = stripe.webhooks.constructEvent(body, signature, credentials.webhookSecret);
   } catch (err: any) {
-    console.error(`Webhook signature verification failed: ${err.message}`);
+    // The signing secret must be the one of THIS endpoint
+    // (Stripe Dashboard -> Developers -> Webhooks -> .../api/stripe-hook).
+    console.error(
+      `Stripe webhook signature verification failed using the ${process.env.STRIPE_WEBHOOK_SECRET ? 'environment' : 'Ops Hub settings'} webhook secret: ${err.message}`,
+    );
     return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 });
   }
 
-  // Handle the event
-  if (event.type === 'payment_intent.succeeded') {
-    const paymentIntent = event.data.object as Stripe.PaymentIntent;
-    const metadata = paymentIntent.metadata;
-
-    // Process the event in the background to avoid timeouts
-    (async () => {
-      try {
-        if (metadata.type === 'quote') {
-          const quoteId = metadata.quote_id;
-          if (!quoteId) {
-            console.error('Webhook Error: quote_id not found in metadata');
-            return;
-          }
-
-          // 1. Update the quote with payment details (fast operation)
-          const updateTimestamp = new Date().toISOString();
-          await db.update(quotes).set({
-              status: 'completed',
-              paymentStatus: 'paid',
-              paymentMethod: 'stripe',
-              mailSent: false, // Mark as not sent yet, the next step will handle it
-              paymentIntentId: paymentIntent.id,
-              paymentDate: updateTimestamp,
-              updatedAt: updateTimestamp,
-          }).where(eq(quotes.id, quoteId));
-
-          revalidatePath('/api/quotes');
-          revalidatePath('/administrator');
-          revalidatePath('/api/admin/quotes');
-
-          // 2. Trigger the email sending API without awaiting the response (fire-and-forget)
-          fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/send-confirmation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quoteId }),
-          });
-
-        } else if (metadata.type === 'ai_document') {
-          // This logic can also be moved to a separate endpoint if it proves to be slow
-          const docDetails = JSON.parse(metadata.document_details);
-          const userDetails = JSON.parse(metadata.user_details);
-
-          const newDocument = await db.insert(aiDocuments).values({
-              uuid: uuidv4(),
-              prompt: docDetails.prompt,
-              content: docDetails.content,
-              email: userDetails.email,
-              userId: userDetails.id,
-              amount: docDetails.price,
-              status: 'paid',
-          }).returning({ id: aiDocuments.id, uuid: aiDocuments.uuid });
-
-          const documentUuid = newDocument[0].uuid;
-
-          const downloadLink = `${process.env.NEXT_PUBLIC_BASE_URL}/api/ai-documents/download-pdf/${documentUuid}`;
-          const emailData = await createAIDocumentPurchaseEmail(
-            userDetails.firstName,
-            userDetails.lastName,
-            paymentIntent.id,
-            new Date(paymentIntent.created * 1000).toLocaleDateString(),
-            docDetails.price,
-            docDetails.prompt,
-            downloadLink,
-            docDetails.content,
-          );
-          
-          await sendEmail({
-              to: userDetails.email,
-              subject: emailData.subject,
-              html: emailData.html,
-          });
-
-          const adminNotificationData = await createAdminNotificationEmail(
-              "ai_document",
-              userDetails.firstName,
-              userDetails.email,
-              docDetails.price,
-              `Document Type: ${docDetails.prompt}`
-          );
-          const adminEmail = await getAdminEmail();
-          await sendEmail({
-              to: adminEmail,
-              subject: adminNotificationData.subject,
-              html: adminNotificationData.html,
-          });
-        }
-      } catch (error) {
-        console.error("Error processing webhook in background:", error);
-      }
-    })();
+  try {
+    const result = await processStripeEvent(event, stripe);
+    console.log(
+      `Stripe webhook ${event.type} (${event.id}) in ${Date.now() - startedAt}ms: ${result.reason}${result.quoteId ? ` [quote ${result.quoteId}]` : ''}`,
+    );
+    return NextResponse.json({ received: true, handled: result.handled, reason: result.reason });
+  } catch (error) {
+    // 500 -> Stripe retries this delivery with backoff for up to 3 days.
+    console.error(`Stripe webhook ${event.type} (${event.id}) failed after ${Date.now() - startedAt}ms:`, error);
+    return NextResponse.json({ error: 'Webhook processing failed.' }, { status: 500 });
   }
-
-  return NextResponse.json({ received: true });
 }

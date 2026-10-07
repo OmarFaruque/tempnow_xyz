@@ -1,4 +1,4 @@
-import { pgTable, unique, serial, varchar, text, timestamp, boolean, json, integer, numeric } from "drizzle-orm/pg-core"
+import { pgTable, unique, serial, varchar, text, timestamp, boolean, json, jsonb, integer, numeric, uuid, index } from "drizzle-orm/pg-core"
 
 
 
@@ -31,13 +31,14 @@ export const users = pgTable("users", {
 	firstName: varchar("first_name", { length: 255 }),
 	lastName: varchar("last_name", { length: 255 }),
 	verificationCodeHash: text("verification_code_hash"),
-	verificationCodeExpiresAt: timestamp("verification_code_expires_at", { withTimezone: true, mode: 'string' }),}, (table) => [
+	verificationCodeExpiresAt: timestamp("verification_code_expires_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
 	unique("users_email_unique").on(table.email),
 ]);
 
 export const settings = pgTable('settings', {
-  param: text('param').primaryKey(), // e.g., 'mot_token'
-  value: text('value'),             // Will store the JSON string with token and timestamp
+	param: text('param').primaryKey(), // e.g., 'mot_token'
+	value: text('value'),             // Will store the JSON string with token and timestamp
 });
 
 export const quotes = pgTable("quotes", {
@@ -50,7 +51,7 @@ export const quotes = pgTable("quotes", {
 	vehicleMake: varchar("vehicle_make", { length: 100 }),
 	vehicleModel: varchar("vehicle_model", { length: 100 }),
 	engineCC: varchar("engine_cc", { length: 50 }),
-	startDate: timestamp("start_date", { mode: 'string' }),	
+	startDate: timestamp("start_date", { mode: 'string' }),
 	endDate: timestamp("end_date", { mode: 'string' }),
 	dateOfBirth: timestamp("date_of_birth", { mode: 'string' }),
 	firstName: varchar("first_name", { length: 100 }),
@@ -72,7 +73,7 @@ export const quotes = pgTable("quotes", {
 	coverReason: varchar("cover_reason", { length: 255 }),
 	mailSent: boolean("mail_sent").default(false),
 	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow().notNull(),	
+	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow().notNull(),
 	quoteData: text("quote_data"), // Storing as JSON string
 	status: varchar("status", { length: 50 }).default('pending').notNull(), // e.g., 'pending', 'completed'
 	paymentIntentId: varchar("payment_intent_id", { length: 255 }),
@@ -87,8 +88,8 @@ export const quotes = pgTable("quotes", {
 	fraudDetails: json("fraud_details"),
 	fraudCheckedAt: timestamp("fraud_checked_at", { mode: 'string' }),
 	fraudNote: text("fraud_note"),
-	
-	});
+
+});
 
 export const coupons = pgTable("coupons", {
 	id: serial("id").primaryKey().notNull(),
@@ -142,7 +143,7 @@ export const messages = pgTable("messages", {
 export const blacklist = pgTable("blacklist", {
 	id: serial("id").primaryKey().notNull(),
 	type: varchar("type", { length: 50 }).notNull(), // 'user', 'ip', 'postcode', 'address', 'reg_number'
-	
+
 	// Fields for 'user' type
 	firstName: varchar("first_name", { length: 255 }),
 	lastName: varchar("last_name", { length: 255 }),
@@ -167,22 +168,30 @@ export const blacklist = pgTable("blacklist", {
 	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow().notNull(),
 });
 
-export const aiDocuments = pgTable("ai_documents", {
-	id: serial("id").primaryKey().notNull(),
-	uuid: varchar("uuid", { length: 255 }).notNull(),
-	prompt: text("prompt"),
-	content: text("content"),
-	email: varchar("email", { length: 255 }),
-	userId: integer('user_id').notNull(),
-	status: varchar("status", { length: 50 }).default('pending'),
-	pdfPath: text('pdf_path'),
-	amount: numeric('amount'),
-	currency: varchar('currency').default('GBP'),
-	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow().notNull(),
-	paymentIntentId: varchar("payment_intent_id", { length: 255 }),
-});
+// The one-off "pay per AI document" table (`ai_documents`) was retired: the
+// document product now lives in `documents` + `templates` + `categories` with
+// credits/subscriptions (drizzle/0009_doc_service_tables.sql). Migration
+// 0011_drop_ai_documents.sql drops the table after
+// `scripts/export-ai-documents.mjs` has exported its rows.
 
+export const paymentGatewayAttempts = pgTable("payment_gateway_attempts", {
+	id: uuid("id").primaryKey().notNull(),
+	checkoutId: text("checkout_id").notNull(),
+	product: varchar("product", { length: 32 }).notNull(),
+	gateway: varchar("gateway", { length: 32 }).notNull(),
+	customerKey: varchar("customer_key", { length: 64 }).notNull(),
+	attemptNumber: integer("attempt_number").notNull(),
+	status: varchar("status", { length: 24 }).default('reserved').notNull(),
+	providerReference: text("provider_reference"),
+	failureCode: varchar("failure_code", { length: 100 }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table) => [
+	unique("payment_gateway_attempts_checkout_number_unique").on(table.checkoutId, table.product, table.attemptNumber),
+	index("payment_gateway_attempts_gateway_status_idx").on(table.gateway, table.status, table.createdAt),
+	index("payment_gateway_attempts_customer_gateway_idx").on(table.customerKey, table.gateway, table.createdAt),
+]);
 
 export const paddleRefundEvents = pgTable("paddle_refund_events", {
 	id: serial("id").primaryKey().notNull(),
@@ -207,3 +216,100 @@ export const paddleRefundEvents = pgTable("paddle_refund_events", {
 }, (table) => [
 	unique("paddle_refund_events_paddle_event_id_unique").on(table.paddleEventId),
 ]);
+// ---------------------------------------------------------------------------
+// Document service tables (merged from the former letterise database,
+// migration 0009). Purchase/catalogue records only - identities live in
+// "users" above. Accessed via raw SQL from features/documents/services.
+// ---------------------------------------------------------------------------
+export const docCategories = pgTable("categories", {
+	id: serial("id").primaryKey().notNull(),
+	name: text("name").notNull(),
+	slug: text("slug").notNull().unique(),
+	description: text("description"),
+	icon: text("icon"),
+	displayOrder: integer("display_order").default(0).notNull(),
+	isActive: boolean("is_active").default(true).notNull(),
+});
+
+export const docTemplates = pgTable("templates", {
+	id: serial("id").primaryKey().notNull(),
+	categoryId: integer("category_id").notNull().references(() => docCategories.id, { onDelete: 'cascade' }),
+	name: text("name").notNull(),
+	slug: text("slug").notNull().unique(),
+	description: text("description"),
+	useCases: jsonb("use_cases"),
+	systemPrompt: text("system_prompt").notNull(),
+	questions: jsonb("questions"),
+	estimatedLength: text("estimated_length"),
+	isFeatured: boolean("is_featured").default(false).notNull(),
+	isActive: boolean("is_active").default(true).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const docDocuments = pgTable("documents", {
+	id: serial("id").primaryKey().notNull(),
+	userId: integer("user_id").notNull().references(() => users.userId, { onDelete: 'cascade' }),
+	templateId: integer("template_id").references(() => docTemplates.id, { onDelete: 'set null' }),
+	title: text("title").notNull(),
+	content: text("content").notNull(),
+	userInputs: jsonb("user_inputs"),
+	status: text("status").default('draft').notNull(),
+	creditsUsed: integer("credits_used").default(0).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const docSubscriptionPlans = pgTable("subscription_plans", {
+	id: serial("id").primaryKey().notNull(),
+	name: text("name").notNull(),
+	description: text("description"),
+	badge: text("badge"),
+	planType: text("plan_type").notNull(),
+	priceCents: integer("price_cents").default(0).notNull(),
+	packagePriceCents: integer("package_price_cents"),
+	pricePerDocumentCents: integer("price_per_document_cents"),
+	creditAmount: integer("credit_amount"),
+	monthlyDocumentLimit: integer("monthly_document_limit"),
+	discountPercent: numeric("discount_percent"),
+	features: jsonb("features"),
+	creditsPerMonth: integer("credits_per_month"),
+	isActive: boolean("is_active").default(true).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const docUserSubscriptions = pgTable("user_subscriptions", {
+	id: serial("id").primaryKey().notNull(),
+	userId: integer("user_id").notNull().references(() => users.userId, { onDelete: 'cascade' }),
+	planId: integer("plan_id").notNull().references(() => docSubscriptionPlans.id, { onDelete: 'cascade' }),
+	provider: text("provider").default('stripe').notNull(),
+	providerSubscriptionId: text("provider_subscription_id"),
+	checkoutId: text("checkout_id"),
+	status: text("status").notNull(),
+	currentPeriodStart: timestamp("current_period_start", { withTimezone: true, mode: 'string' }),
+	currentPeriodEnd: timestamp("current_period_end", { withTimezone: true, mode: 'string' }),
+	cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const docUserCredits = pgTable("user_credits", {
+	id: serial("id").primaryKey().notNull(),
+	userId: integer("user_id").notNull().references(() => users.userId, { onDelete: 'cascade' }).unique(),
+	creditsAvailable: integer("credits_available").default(0).notNull(),
+	creditsUsed: integer("credits_used").default(0).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const docTransactions = pgTable("transactions", {
+	id: serial("id").primaryKey().notNull(),
+	userId: integer("user_id").notNull().references(() => users.userId, { onDelete: 'cascade' }),
+	provider: text("provider").default('stripe').notNull(),
+	providerPaymentId: text("provider_payment_id"),
+	checkoutId: text("checkout_id"),
+	amountCents: integer("amount_cents"),
+	creditsPurchased: integer("credits_purchased"),
+	transactionType: text("transaction_type"),
+	status: text("status").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});

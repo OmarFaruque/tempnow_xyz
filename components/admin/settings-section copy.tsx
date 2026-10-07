@@ -35,7 +35,6 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { QuoteFormulaSettings } from "./quote-formula-settings"
 import { DocumentTemplatesTab } from "./document-templates-tab"
 import { defaultMaintenanceSettings } from "@/lib/maintenance"
-import { PaymentSettingsTab } from "./features/config/payment-config-tab"
 
 export function EmailTemplatesTab() {
   const [templates, setTemplates] = useState({
@@ -1591,17 +1590,1168 @@ export function SettingsSection() {
         </TabsList>
 
         <TabsContent value="payment" className="space-y-6">
-          {/* Payment Processor Selection  */}
-          <PaymentSettingsTab
-            settings={settings}
-            updateSetting={updateSetting}
-            showKeys={showKeys}
-            toggleKeyVisibility={toggleKeyVisibility}
-            testConnection={testConnection}
-            testing={testing}
-            testResults={testResults}
-            maskApiKey={maskApiKey}
-          />
+          {/* Payment Processor Selection */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-blue-600" />
+                Payment Processor Selection
+              </CardTitle>
+              <CardDescription>Choose which payment processor to use for checkout</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="active-processor">Active Payment Processor</Label>
+                  <Select
+                    value={settings.payment.activeProcessor}
+                    onValueChange={(value) => updateSetting("payment", "activeProcessor", value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">
+                        <span className="flex items-center gap-2">
+                          <Construction className="h-4 w-4 text-orange-500" />
+                          No Processor (Disabled)
+                        </span>
+                      </SelectItem>
+                      <SelectItem value="paddle">
+                        Paddle
+                        <Badge className="ml-2 bg-blue-100 text-blue-800">Recommended</Badge>
+                      </SelectItem>
+                      <SelectItem value="stripe">Stripe</SelectItem>
+                      <SelectItem value="mollie">Mollie</SelectItem>
+                      <SelectItem value="airwallex">AirWallex</SelectItem>
+                      <SelectItem value="square">Square</SelectItem>
+                      <SelectItem value="viva">Viva</SelectItem>
+                      <SelectItem value="lemonsqueezy">Lemon Squeezy</SelectItem>
+                      <SelectItem value="paypal">PayPal</SelectItem>
+                      <SelectItem value="checkoutcom">Checkout.com</SelectItem>
+                      <SelectItem value="authorizenet">Authorize.Net</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    This processor will be used for all checkout transactions. Select &quot;No Processor&quot; to disable payments.
+                  </p>
+                </div>
+
+                {settings.payment.activeProcessor === "none" && (
+                  <div className="mt-4 space-y-3">
+                    <Alert className="bg-orange-50 border-orange-200">
+                      <Construction className="h-4 w-4 text-orange-600" />
+                      <AlertTitle className="text-orange-800">Payment Processing Disabled</AlertTitle>
+                      <AlertDescription className="text-orange-700 text-sm">
+                        All payment processors are currently disabled. Customers will see the message below on the checkout page instead of payment options.
+                      </AlertDescription>
+                    </Alert>
+                    <div>
+                      <Label htmlFor="payment-disabled-message" className="text-sm font-medium">
+                        Payment Disabled Message (HTML allowed)
+                      </Label>
+                      <p className="text-xs text-gray-500 mb-2">
+                        This message will be shown to customers on the checkout page. You can use HTML tags including links, e.g. <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">{`<a href="https://example.com">Click here</a>`}</code>
+                      </p>
+                      <Textarea
+                        id="payment-disabled-message"
+                        rows={5}
+                        className="font-mono text-sm"
+                        placeholder='We are currently performing system updates. Payments will be reactivated shortly. In the meantime, you can use our partner website: <a href="https://tempify.co.uk" target="_blank" style="color: #2563eb; text-decoration: underline;">Tempify</a>'
+                        value={settings.payment.paymentDisabledMessage || ""}
+                        onChange={(e) => updateSetting("payment", "paymentDisabledMessage", e.target.value)}
+                      />
+                      {settings.payment.paymentDisabledMessage && (
+                        <div className="mt-3">
+                          <Label className="text-xs text-gray-500">Preview:</Label>
+                          <div className="mt-1 p-4 bg-white border border-gray-200 rounded-lg text-sm text-gray-700">
+                            <div dangerouslySetInnerHTML={{ __html: settings.payment.paymentDisabledMessage }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Paddle Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-blue-600" />
+                Paddle Payment Settings
+                {settings.payment.activeProcessor === "paddle" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure your Paddle payment processor integration</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="paddle-vendor-id">Vendor ID</Label>
+                  <Input
+                    id="paddle-vendor-id"
+                    placeholder="Enter your Paddle Vendor ID"
+                    value={settings.paddle.vendorId}
+                    onChange={(e) => updateSetting("paddle", "vendorId", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="paddle-environment">Environment</Label>
+                  <Select
+                    value={settings.paddle.environment}
+                    onValueChange={(value) => updateSetting("paddle", "environment", value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="sandbox">
+                        Sandbox
+                        <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                      </SelectItem>
+                      <SelectItem value="production">
+                        Production
+                        <Badge className="ml-2 bg-green-100 text-green-800">Live</Badge>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="paddle-api-key">API Key</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="paddle-api-key"
+                    type={showKeys.paddle ? "text" : "password"}
+                    placeholder="Enter your Paddle API Key"
+                    value={showKeys.paddle ? settings.paddle.apiKey : maskApiKey(settings.paddle.apiKey)}
+                    onChange={(e) => updateSetting("paddle", "apiKey", e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("paddle")}>
+                    {showKeys.paddle ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="paddle-client-token">Client Token</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="paddle-client-token"
+                    type={showKeys.paddle ? "text" : "password"}
+                    placeholder="Enter your Paddle Client Token"
+                    value={showKeys.paddle ? settings.paddle.clientToken : maskApiKey(settings.paddle.clientToken)}
+                    onChange={(e) => updateSetting("paddle", "clientToken", e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("paddle")}>
+                    {showKeys.paddle ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="paddle-discord-refund-webhook">Refund Discord Webhook URL</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="paddle-discord-refund-webhook"
+                    type={showKeys.paddle ? "text" : "password"}
+                    placeholder="https://discord.com/api/webhooks/..."
+                    value={showKeys.paddle ? settings.paddle.discordRefundWebhookUrl : maskApiKey(settings.paddle.discordRefundWebhookUrl)}
+                    onChange={(e) => updateSetting("paddle", "discordRefundWebhookUrl", e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("paddle")}>
+                    {showKeys.paddle ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <small className="text-xs text-gray-500">Instant refund/chargeback alerts are sent to this Discord webhook.</small>
+              </div>
+
+              <Button
+                onClick={() => testConnection("paddle")}
+                disabled={testing.paddle || !settings.paddle.apiKey}
+                variant="outline"
+                className="w-full"
+              >
+                {testing.paddle ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-2" />
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <TestTube className="h-4 w-4 mr-2" />
+                    Test Paddle Connection
+                  </>
+                )}
+              </Button>
+
+              {testResults.paddle && (
+                <div
+                  className={`p-3 rounded-lg border ${testResults.paddle.success ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}
+                >
+                  <div className="flex items-center space-x-2">
+                    {testResults.paddle.success ? (
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                    ) : (
+                      <AlertTriangle className="h-4 w-4 text-red-600" />
+                    )}
+                    <span
+                      className={`text-sm font-medium ${testResults.paddle.success ? "text-green-800" : "text-red-800"}`}
+                    >
+                      {testResults.paddle.message}
+                    </span>
+                    <span className="text-xs text-gray-500">({testResults.paddle.timestamp})</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="text-xs text-gray-500">
+                Use this Paddle webhook URL in your Paddle dashboard: <i>{process.env.NEXT_PUBLIC_BASE_URL}/api/paddle/webhook</i>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Stripe Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-purple-600" />
+                Stripe Payment Settings
+                {settings.payment.activeProcessor === "stripe" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure your Stripe payment processor integration</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="stripe-environment">Environment</Label>
+                <Select
+                  value={settings.stripe.environment}
+                  onValueChange={(value) => updateSetting("stripe", "environment", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="test">
+                      Test Mode
+                      <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                    </SelectItem>
+                    <SelectItem value="production">
+                      Live Mode
+                      <Badge className="ml-2 bg-green-100 text-green-800">Live</Badge>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <br />
+              </div>
+              <div className="mt-2"><small className="text-xs text-gray-500"><i>Webhook URL: {process.env.NEXT_PUBLIC_BASE_URL}/api/stripe-webhook</i></small>, &nbsp;<small className="text-xs text-gray-500">Event: <i>payment_intent.succeeded</i></small></div>
+
+              <Button
+                onClick={() => testConnection("stripe")}
+                disabled={testing.stripe || !process.env.STRIPE_SECRET_KEY}
+                variant="outline"
+                className="w-full"
+              >
+                {testing.stripe ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-2" />
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <TestTube className="h-4 w-4 mr-2" />
+                    Test Stripe Connection
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Lemon Squeezy Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-yellow-500" />
+                Lemon Squeezy Payment Settings
+                {settings.payment.activeProcessor === "lemonsqueezy" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure your Lemon Squeezy payment processor integration</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="lemonsqueezy-store-id">Store ID</Label>
+                  <Input
+                    id="lemonsqueezy-store-id"
+                    placeholder="Enter your Lemon Squeezy Store ID"
+                    value={settings?.lemonsqueezy?.storeId}
+                    onChange={(e) => updateSetting("lemonsqueezy", "storeId", e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="lemonsqueezy-variant-id">Variant ID</Label>
+                  <Input
+                    id="lemonsqueezy-variant-id"
+                    placeholder="Enter your Lemon Squeezy Variant ID"
+                    value={settings?.lemonsqueezy?.variantId}
+                    onChange={(e) => updateSetting("lemonsqueezy", "variantId", e.target.value)}
+                  />
+                </div>
+
+              </div>
+
+              <div>
+                <Label htmlFor="lemonsqueezy-api-key">API Key</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="lemonsqueezy-api-key"
+                    type={showKeys.lemonsqueezy ? "text" : "password"}
+                    placeholder="Enter your Lemon Squeezy API Key"
+                    value={showKeys.lemonsqueezy ? settings?.lemonsqueezy?.apiKey : maskApiKey(settings?.lemonsqueezy?.apiKey)}
+                    onChange={(e) => updateSetting("lemonsqueezy", "apiKey", e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("lemonsqueezy")}>
+                    {showKeys.lemonsqueezy ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="lemonsqueezy-webhook-secret">Webhook Secret</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="lemonsqueezy-webhook-secret"
+                    type={showKeys.lemonsqueezy_webhook ? "text" : "password"}
+                    placeholder="webhook secret..."
+                    value={showKeys.lemonsqueezy_webhook ? settings?.lemonsqueezy?.webhookSecret : maskApiKey(settings?.lemonsqueezy?.webhookSecret)}
+                    onChange={(e) => updateSetting("lemonsqueezy", "webhookSecret", e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("lemonsqueezy_webhook")}>
+                    {showKeys.lemonsqueezy_webhook ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <small> This is used to verify webhook events from Lemon Squeezy. <i>Webhook URL: {process.env.NEXT_PUBLIC_BASE_URL}/api/lemonsqueezy-webhook</i></small>
+              </div>
+
+              <Button
+                onClick={() => testConnection("lemonsqueezy")}
+                disabled={testing.lemonsqueezy || !settings?.lemonsqueezy?.apiKey}
+                variant="outline"
+                className="w-full"
+              >
+                {testing.lemonsqueezy ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-2" />
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <TestTube className="h-4 w-4 mr-2" />
+                    Test Lemon Squeezy Connection
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+
+
+          {/* Airwallex Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-purple-600" />
+                Airwallex Payment Settings
+              </CardTitle>
+              <CardDescription>Configure your Airwallex payment processor integration</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="airwallex-environment">Environment</Label>
+                <Select
+                  value={settings?.airwallex?.environment}
+                  onValueChange={(value) => updateSetting("airwallex", "environment", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="test">
+                      Test Mode
+                      <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                    </SelectItem>
+                    <SelectItem value="production">
+                      Live Mode
+                      <Badge className="ml-2 bg-green-100 text-green-800">Live</Badge>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label htmlFor="airwallex-publishable-key">Airwallex Client ID</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="airwallex-publishable-key"
+                    type={showKeys.airwallex ? "text" : "password"}
+                    placeholder="client id..."
+                    value={
+                      showKeys.airwallex ? settings?.airwallex?.client_id : maskApiKey(settings?.airwallex?.client_id)
+                    }
+                    onChange={(e) => updateSetting("airwallex", "client_id", e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("airwallex")}>
+                    {showKeys.airwallex ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="airwallex-secret-key">API Key</Label>
+                <Input
+                  id="airwallex-secret-key"
+                  type="password"
+                  placeholder="apikey..."
+                  value={settings?.airwallex?.apikey}
+                  onChange={(e) => updateSetting("airwallex", "apikey", e.target.value)}
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="airwallex-webhook-secret">Webhook Secret</Label>
+                <Input
+                  id="airwallex-webhook-secret"
+                  type="password"
+                  placeholder="webhook secret..."
+                  value={settings?.airwallex?.webhookSecret}
+                  onChange={(e) => updateSetting("airwallex", "webhookSecret", e.target.value)}
+                />
+                <small> This is used to verify webhook events from Airwallex. <i>Webhook URL: {process.env.NEXT_PUBLIC_BASE_URL}/api/airwallex-webhook</i></small>
+              </div>
+
+              <Button
+                onClick={() => testConnection("airwallex")}
+                disabled={testing.airwallex || !settings?.airwallex?.apikey}
+                variant="outline"
+                className="w-full"
+              >
+                {testing.airwallex ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-2" />
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <TestTube className="h-4 w-4 mr-2" />
+                    Test Airwallex Connection
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Square Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-gray-800" />
+                Square Payment Settings
+                {settings.payment.activeProcessor === "square" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure your Square payment processor integration</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="square-environment">Environment</Label>
+                <Select
+                  value={settings.square.environment}
+                  onValueChange={(value) => updateSetting("square", "environment", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sandbox">
+                      Sandbox
+                      <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                    </SelectItem>
+                    <SelectItem value="production">
+                      Production
+                      <Badge className="ml-2 bg-green-100 text-green-800">Live</Badge>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="square-app-id">App ID</Label>
+                  <Input
+                    id="square-app-id"
+                    placeholder="Enter your Square App ID"
+                    value={settings.square.appId}
+                    onChange={(e) => updateSetting("square", "appId", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="square-location-id">App Location ID</Label>
+                  <Input
+                    id="square-location-id"
+                    placeholder="Enter your Square Location ID"
+                    value={settings.square.appLocationId}
+                    onChange={(e) => updateSetting("square", "appLocationId", e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="square-access-token">App Access Token</Label>
+                <Input
+                  id="square-access-token"
+                  type={showKeys.square ? "text" : "password"}
+                  placeholder="Enter your Square Access Token"
+                  value={showKeys.square ? settings.square.accessToken : maskApiKey(settings.square.accessToken)}
+                  onChange={(e) => updateSetting("square", "accessToken", e.target.value)}
+                />
+              </div>
+
+              <div>
+                <Label>Square Payment Methods</Label>
+                <div className="mt-2 space-y-2 rounded-md border p-4">
+                  <div className="flex items-center space-x-2">
+                    <Checkbox id="square-card" checked={settings.square?.paymentMethods?.card ?? true} onCheckedChange={(checked) => updateSquarePaymentMethod('card', !!checked)} />
+                    <Label htmlFor="square-card">Card Payment</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox id="square-google" checked={settings.square?.paymentMethods?.googlePay ?? false} onCheckedChange={(checked) => updateSquarePaymentMethod('googlePay', !!checked)} />
+                    <Label htmlFor="square-google">Google Pay</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox id="square-apple" checked={settings.square?.paymentMethods?.applePay ?? false} onCheckedChange={(checked) => updateSquarePaymentMethod('applePay', !!checked)} />
+                    <Label htmlFor="square-apple">Apple Pay</Label>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Mollie Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-orange-600" />
+                Mollie Payment Settings
+                {settings.payment.activeProcessor === "mollie" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure your Mollie payment processor integration</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="mollie-environment">Environment</Label>
+                <Select
+                  value={settings.mollie.environment}
+                  onValueChange={(value) => updateSetting("mollie", "environment", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="test">
+                      Test Mode
+                      <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                    </SelectItem>
+                    <SelectItem value="production">
+                      Live Mode
+                      <Badge className="ml-2 bg-green-100 text-green-800">Live</Badge>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label htmlFor="mollie-api-key">API Key</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="mollie-api-key"
+                    type={showKeys.mollie ? "text" : "password"}
+                    placeholder="test_... or live_..."
+                    value={showKeys.mollie ? settings.mollie.apiKey : maskApiKey(settings.mollie.apiKey)}
+                    onChange={(e) => updateSetting("mollie", "apiKey", e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("mollie")}>
+                    {showKeys.mollie ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <Button
+                onClick={() => testConnection("mollie")}
+                disabled={testing.mollie || !settings.mollie.apiKey}
+                variant="outline"
+                className="w-full"
+              >
+                {testing.mollie ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-2" />
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <TestTube className="h-4 w-4 mr-2" />
+                    Test Mollie Connection
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+
+
+
+          {/* PayPal Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-blue-700" />
+                PayPal Payment Settings
+                {settings.payment.activeProcessor === "paypal" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure separate sandbox and live PayPal credentials</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="paypal-environment">Mode</Label>
+                <Select
+                  value={settings.paypal.environment}
+                  onValueChange={(value) => updateSetting("paypal", "environment", value)}
+                >
+                  <SelectTrigger id="paypal-environment">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sandbox">
+                      Sandbox
+                      <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                    </SelectItem>
+                    <SelectItem value="live">
+                      Live
+                      <Badge className="ml-2 bg-green-100 text-green-800">Production</Badge>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500 mt-1">Credential inputs below automatically switch based on selected mode.</p>
+              </div>
+
+              {settings.paypal.environment === "sandbox" ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="paypal-sandbox-client-id">Sandbox Client ID</Label>
+                    <Input
+                      id="paypal-sandbox-client-id"
+                      type={showKeys.paypalSandbox ? "text" : "password"}
+                      placeholder="Enter your sandbox client ID"
+                      value={showKeys.paypalSandbox ? settings.paypal.sandboxClientId : maskApiKey(settings.paypal.sandboxClientId)}
+                      onChange={(e) => updateSetting("paypal", "sandboxClientId", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="paypal-sandbox-secret">Sandbox Secret</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="paypal-sandbox-secret"
+                        type={showKeys.paypalSandbox ? "text" : "password"}
+                        placeholder="Enter your sandbox secret"
+                        value={showKeys.paypalSandbox ? settings.paypal.sandboxSecret : maskApiKey(settings.paypal.sandboxSecret)}
+                        onChange={(e) => updateSetting("paypal", "sandboxSecret", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("paypalSandbox")}>
+                        {showKeys.paypalSandbox ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <Label htmlFor="paypal-live-client-id">Live Client ID</Label>
+                    <Input
+                      id="paypal-live-client-id"
+                      type={showKeys.paypalLive ? "text" : "password"}
+                      placeholder="Enter your live client ID"
+                      value={showKeys.paypalLive ? settings.paypal.liveClientId : maskApiKey(settings.paypal.liveClientId)}
+                      onChange={(e) => updateSetting("paypal", "liveClientId", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="paypal-live-secret">Live Secret</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="paypal-live-secret"
+                        type={showKeys.paypalLive ? "text" : "password"}
+                        placeholder="Enter your live secret"
+                        value={showKeys.paypalLive ? settings.paypal.liveSecret : maskApiKey(settings.paypal.liveSecret)}
+                        onChange={(e) => updateSetting("paypal", "liveSecret", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("paypalLive")}>
+                        {showKeys.paypalLive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+
+          {/* checkout.com Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-indigo-700" />
+                Checkout.com Payment Settings
+                {settings.payment.activeProcessor === "checkoutcom" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure separate sandbox and live Checkout.com credentials</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="checkoutcom-environment">Mode</Label>
+                <Select
+                  value={settings.checkoutcom.environment}
+                  onValueChange={(value) => updateSetting("checkoutcom", "environment", value)}
+                >
+                  <SelectTrigger id="checkoutcom-environment">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sandbox">
+                      Sandbox
+                      <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                    </SelectItem>
+                    <SelectItem value="live">
+                      Live
+                      <Badge className="ml-2 bg-green-100 text-green-800">Production</Badge>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500 mt-1">Credential inputs below automatically switch based on selected mode.</p>
+              </div>
+
+              {settings.checkoutcom.environment === "sandbox" ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="checkoutcom-sandbox-public-key">Sandbox Public Key</Label>
+                    <Input
+                      id="checkoutcom-sandbox-public-key"
+                      type={showKeys.checkoutcomSandbox ? "text" : "password"}
+                      placeholder="pk_test_..."
+                      value={showKeys.checkoutcomSandbox ? settings.checkoutcom.sandboxPublicKey : maskApiKey(settings.checkoutcom.sandboxPublicKey)}
+                      onChange={(e) => updateSetting("checkoutcom", "sandboxPublicKey", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="checkoutcom-sandbox-secret-key">Sandbox Secret Key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="checkoutcom-sandbox-secret-key"
+                        type={showKeys.checkoutcomSandbox ? "text" : "password"}
+                        placeholder="sk_test_..."
+                        value={showKeys.checkoutcomSandbox ? settings.checkoutcom.sandboxSecretKey : maskApiKey(settings.checkoutcom.sandboxSecretKey)}
+                        onChange={(e) => updateSetting("checkoutcom", "sandboxSecretKey", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("checkoutcomSandbox")}>
+                        {showKeys.checkoutcomSandbox ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="checkoutcom-live-public-key">Live Public Key</Label>
+                    <Input
+                      id="checkoutcom-live-public-key"
+                      type={showKeys.checkoutcomLive ? "text" : "password"}
+                      placeholder="pk_live_..."
+                      value={showKeys.checkoutcomLive ? settings.checkoutcom.livePublicKey : maskApiKey(settings.checkoutcom.livePublicKey)}
+                      onChange={(e) => updateSetting("checkoutcom", "livePublicKey", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="checkoutcom-live-secret-key">Live Secret Key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="checkoutcom-live-secret-key"
+                        type={showKeys.checkoutcomLive ? "text" : "password"}
+                        placeholder="sk_live_..."
+                        value={showKeys.checkoutcomLive ? settings.checkoutcom.liveSecretKey : maskApiKey(settings.checkoutcom.liveSecretKey)}
+                        onChange={(e) => updateSetting("checkoutcom", "liveSecretKey", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("checkoutcomLive")}>
+                        {showKeys.checkoutcomLive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Authorize.Net Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-sky-700" />
+                Authorize.Net Payment Settings
+                {settings.payment.activeProcessor === "authorizenet" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure separate sandbox and live Authorize.Net credentials</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="authorizenet-environment">Mode</Label>
+                <Select
+                  value={settings.authorizenet.environment}
+                  onValueChange={(value) => updateSetting("authorizenet", "environment", value)}
+                >
+                  <SelectTrigger id="authorizenet-environment">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sandbox">
+                      Sandbox
+                      <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                    </SelectItem>
+                    <SelectItem value="live">
+                      Live
+                      <Badge className="ml-2 bg-green-100 text-green-800">Production</Badge>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {settings.authorizenet.environment === "sandbox" ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <Label htmlFor="authorizenet-sandbox-login-id">Sandbox API Login ID</Label>
+                    <Input
+                      id="authorizenet-sandbox-login-id"
+                      type={showKeys.authorizenetSandbox ? "text" : "password"}
+                      placeholder="Enter sandbox API Login ID"
+                      value={showKeys.authorizenetSandbox ? settings.authorizenet.sandboxApiLoginId : maskApiKey(settings.authorizenet.sandboxApiLoginId)}
+                      onChange={(e) => updateSetting("authorizenet", "sandboxApiLoginId", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="authorizenet-sandbox-transaction-key">Sandbox Transaction Key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="authorizenet-sandbox-transaction-key"
+                        type={showKeys.authorizenetSandbox ? "text" : "password"}
+                        placeholder="Enter sandbox transaction key"
+                        value={showKeys.authorizenetSandbox ? settings.authorizenet.sandboxTransactionKey : maskApiKey(settings.authorizenet.sandboxTransactionKey)}
+                        onChange={(e) => updateSetting("authorizenet", "sandboxTransactionKey", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("authorizenetSandbox")}>
+                        {showKeys.authorizenetSandbox ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div>
+                    <Label htmlFor="authorizenet-sandbox-client-key">Sandbox Client Key (Accept.js)</Label>
+                    <Input
+                      id="authorizenet-sandbox-client-key"
+                      type={showKeys.authorizenetSandbox ? "text" : "password"}
+                      placeholder="Enter sandbox client key"
+                      value={showKeys.authorizenetSandbox ? settings.authorizenet.sandboxClientKey : maskApiKey(settings.authorizenet.sandboxClientKey)}
+                      onChange={(e) => updateSetting("authorizenet", "sandboxClientKey", e.target.value)}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <Label htmlFor="authorizenet-live-login-id">Live API Login ID</Label>
+                    <Input
+                      id="authorizenet-live-login-id"
+                      type={showKeys.authorizenetLive ? "text" : "password"}
+                      placeholder="Enter live API Login ID"
+                      value={showKeys.authorizenetLive ? settings.authorizenet.liveApiLoginId : maskApiKey(settings.authorizenet.liveApiLoginId)}
+                      onChange={(e) => updateSetting("authorizenet", "liveApiLoginId", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="authorizenet-live-transaction-key">Live Transaction Key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="authorizenet-live-transaction-key"
+                        type={showKeys.authorizenetLive ? "text" : "password"}
+                        placeholder="Enter live transaction key"
+                        value={showKeys.authorizenetLive ? settings.authorizenet.liveTransactionKey : maskApiKey(settings.authorizenet.liveTransactionKey)}
+                        onChange={(e) => updateSetting("authorizenet", "liveTransactionKey", e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("authorizenetLive")}>
+                        {showKeys.authorizenetLive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div>
+                    <Label htmlFor="authorizenet-live-client-key">Live Client Key (Accept.js)</Label>
+                    <Input
+                      id="authorizenet-live-client-key"
+                      type={showKeys.authorizenetLive ? "text" : "password"}
+                      placeholder="Enter live client key"
+                      value={showKeys.authorizenetLive ? settings.authorizenet.liveClientKey : maskApiKey(settings.authorizenet.liveClientKey)}
+                      onChange={(e) => updateSetting("authorizenet", "liveClientKey", e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+
+
+          {/* Viva Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-blue-600" />
+                Viva Payment Settings
+                {settings.payment.activeProcessor === "viva" && (
+                  <Badge className="bg-green-100 text-green-800">Active</Badge>
+                )}
+              </CardTitle>
+              <CardDescription>Configure your Viva payment processor integration</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="viva-merchant-id">Merchant ID / Client ID</Label>
+                  <Input
+                    id="viva-merchant-id"
+                    placeholder="Enter your Viva Merchant ID"
+                    value={settings.viva.merchantId}
+                    onChange={(e) => updateSetting("viva", "merchantId", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="viva-environment">Environment</Label>
+                  <Select
+                    value={settings.viva.env}
+                    onValueChange={(value) => updateSetting("viva", "env", value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="demo">
+                        Demo
+                        <Badge className="ml-2 bg-yellow-100 text-yellow-800">Test</Badge>
+                      </SelectItem>
+                      <SelectItem value="live">
+                        Live
+                        <Badge className="ml-2 bg-green-100 text-green-800">Live</Badge>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="viva-api-key">API Key / Client Secret</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="viva-api-key"
+                    type={showKeys.viva ? "text" : "password"}
+                    placeholder="Enter your Viva API Key"
+                    value={showKeys.viva ? settings.viva.apiKey : maskApiKey(settings.viva.apiKey)}
+                    onChange={(e) => updateSetting("viva", "apiKey", e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => toggleKeyVisibility("viva")}>
+                    {showKeys.viva ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="viva-source-code">Source Code</Label>
+                <Input
+                  id="viva-source-code"
+                  placeholder="Enter your Viva Source Code"
+                  value={settings.viva.sourceCode}
+                  onChange={(e) => updateSetting("viva", "sourceCode", e.target.value)}
+                />
+              </div>
+
+              <Alert className="mt-4">
+                <Info className="h-4 w-4" />
+                <AlertTitle>Action Required: Configure Viva Settings</AlertTitle>
+                <AlertDescription>
+                  Please set the following URLs in your Viva Payment profile settings:
+                  <ul className="mt-2 list-disc pl-5 space-y-1">
+                    <li><span className="font-medium">Success URL:</span> <code className="relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold">{process.env.NEXT_PUBLIC_BASE_URL}/payment-confirmation</code></li>
+                    <li><span className="font-medium">Failed URL:</span> <code className="relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold">{process.env.NEXT_PUBLIC_BASE_URL}/payment-failed</code></li>
+                  </ul>
+                  These URLs are crucial for Viva to redirect your customers after payment.
+                </AlertDescription>
+              </Alert>
+
+              <Button
+                onClick={() => testConnection("viva")}
+                disabled={testing.viva || !settings.viva.apiKey}
+                variant="outline"
+                className="w-full"
+              >
+                {testing.viva ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-2" />
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <TestTube className="h-4 w-4 mr-2" />
+                    Test Viva Connection
+                  </>
+                )}
+              </Button>
+
+              {testResults.viva && (
+                <div
+                  className={`p-3 rounded-lg border ${testResults.viva.success ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}
+                >
+                  <div className="flex items-center space-x-2">
+                    {testResults.viva.success ? (
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                    ) : (
+                      <AlertTriangle className="h-4 w-4 text-red-600" />
+                    )}
+                    <span
+                      className={`text-sm font-medium ${testResults.viva.success ? "text-green-800" : "text-red-800"}`}
+                    >
+                      {testResults.viva.message}
+                    </span>
+                    <span className="text-xs text-gray-500">({testResults.viva.timestamp})</span>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Bank Payment Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Database className="h-5 w-5 text-blue-600" />
+                Bank Payment Settings
+              </CardTitle>
+              <CardDescription>
+                Configure settings for manual bank transfers. This option will appear alongside your active payment processor.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center space-x-2 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <Checkbox
+                  id="show-bank-payment"
+                  checked={settings.bank.show}
+                  onCheckedChange={(checked) => updateSetting("bank", "show", !!checked)}
+                />
+                <Label htmlFor="show-bank-payment" className="font-medium text-blue-800">
+                  Enable Bank Payment option at checkout
+                </Label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="bank-account-name">Account Name</Label>
+                  <Input
+                    id="bank-account-name"
+                    placeholder="Enter your Bank Account Name"
+                    value={settings.bank.name}
+                    onChange={(e) => updateSetting("bank", "name", e.target.value)}
+                    disabled={!settings.bank.show}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="bank-account-number">Account Number</Label>
+                  <Input
+                    id="bank-account-number"
+                    placeholder="Enter your Bank Account Number"
+                    value={settings.bank.accountNumber}
+                    onChange={(e) => updateSetting("bank", "accountNumber", e.target.value)}
+                    disabled={!settings.bank.show}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="bank-sort-code">Sort Code</Label>
+                  <Input
+                    id="bank-sort-code"
+                    placeholder="e.g., 04-00-04"
+                    value={settings.bank.sortCode}
+                    onChange={(e) => updateSetting("bank", "sortCode", e.target.value)}
+                    disabled={!settings.bank.show}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="bank-reference">Reference Information</Label>
+                  <Input
+                    id="bank-reference"
+                    placeholder="e.g., Use your quote ID as the payment reference."
+                    value={settings.bank.reference}
+                    onChange={(e) => updateSetting("bank", "reference", e.target.value)}
+                    disabled={!settings.bank.show}
+                  />
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="bank-info-text">Additional Info Text</Label>
+                <Textarea
+                  id="bank-info-text"
+                  placeholder="e.g., Your quote will be marked as paid once we confirm receipt of your payment."
+                  value={settings.bank.info}
+                  onChange={(e) => updateSetting("bank", "info", e.target.value)}
+                  disabled={!settings.bank.show}
+                />
+              </div>
+              <div>
+                <Label htmlFor="bank-discount">Percentage Off for Bank Payment (%)</Label>
+                <Input id="bank-discount" type="number" value={settings.bank.discountPercentage} onChange={(e) => updateSetting("bank", "discountPercentage", Number(e.target.value))} disabled={!settings.bank.show} />
+                <p className="text-xs text-gray-500 mt-1">Apply a discount for customers who choose to pay via bank transfer. Enter 0 for no discount.</p>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="ai" className="space-y-6">
@@ -2135,7 +3285,7 @@ export function SettingsSection() {
                             </SelectContent>
                           </Select>
                         </div>
-
+                        
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="redirectUrl">Redirect URL</Label>

@@ -51,128 +51,126 @@ export default function usePaddle() {
         initializePaddle({
           environment: environment,
           token: clientToken,
-          eventCallback: function(event) {
-            
+          eventCallback: function (event) {
+
             if (event.name === "checkout.error") {
-                console.error("Paddle Checkout Error:", event);
-                 addNotification({
-                  type: "error",
-                  title: "Payment Failed",
-                  message: "An error occurred during the payment process. Please try again.",
-                });
+              console.error("Paddle Checkout Error:", event);
+              addNotification({
+                type: "error",
+                title: "Payment Failed",
+                message: "An error occurred during the payment process. Please try again.",
+              });
             }
-        
+
             if (event.name === "checkout.completed") {
-                const token = Cookies.get("auth_token");
-                const transactionId = event.data?.transaction_id || event.data?.checkout?.id;
-                let user: DecodedToken | null = null;
-                if (token) {
-                    user = jwtDecode<DecodedToken>(token);
-                }
+              const token = Cookies.get("auth_token");
+              const transactionId = event.data?.transaction_id || event.data?.checkout?.id;
+              let user: DecodedToken | null = null;
+              if (token) {
+                user = jwtDecode<DecodedToken>(token);
+              }
 
 
-                
-
-                const customData = event.data.custom_data;
-
-                if (
-                  customData?.document_id &&
-                  customData?.purchase_type === "image"
-                ) {
-                    window.dispatchEvent(
-                      new CustomEvent("ai-paddle-payment-completed", {
-                        detail: {
-                          documentId: customData.document_id,
-                          documentUuid: customData.document_uuid,
-                          transactionId,
-                        },
-                      }),
-                    );
-                    return;
-                }
 
 
-                if (customData && customData.document_details) {
-                    const docDetails = JSON.parse(customData.document_details);
-                    const userDetails = JSON.parse(customData.user_details);
+              const customData = event.data.custom_data;
 
-                    fetch("/api/ai-documents/save-document", {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${token}`,
-                        },
-                        body: JSON.stringify({ 
-                            docDetails,
-                            userDetails,
-                            transaction: event.data,
-                        })
-                    })
+              if (
+                customData?.document_id &&
+                customData?.purchase_type === "image"
+              ) {
+                window.dispatchEvent(
+                  new CustomEvent("ai-paddle-payment-completed", {
+                    detail: {
+                      documentId: customData.document_id,
+                      documentUuid: customData.document_uuid,
+                      transactionId,
+                    },
+                  }),
+                );
+                return;
+              }
+
+
+              if (customData && customData.document_details) {
+                const docDetails = JSON.parse(customData.document_details);
+                const userDetails = JSON.parse(customData.user_details);
+
+                fetch("/api/ai-documents/save-document", {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                  },
+                  body: JSON.stringify({
+                    docDetails,
+                    userDetails,
+                    transaction: event.data,
+                  })
+                })
+                  .then(response => {
+                    if (!response.ok) {
+                      throw new Error("Failed to save document");
+                    }
+                    return response.json();
+                  })
+                  .then(data => {
+                    localStorage.setItem("aiDocumentContent", docDetails.content);
+                    localStorage.setItem("aiDocumentType", docDetails.prompt.substring(0, 100) + "...");
+                    window.location.href = "/ai-payment-confirmation";
+                  })
+                  .catch(error => {
+                    console.error("Error saving AI document:", error);
+                    addNotification({
+                      type: "error",
+                      title: "Document Save Failed",
+                      message: "An error occurred while saving the document. Please try again.",
+                    });
+                  });
+              } else {
+                const storedQuoteData = localStorage.getItem("quoteData");
+
+                if (storedQuoteData) {
+                  const quoteData = JSON.parse(storedQuoteData);
+                  const quoteId = quoteData.id;
+                  fetch(`/api/quotes/${quoteId}`, {
+                    method: 'PUT',
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(
+                      {
+                        PaymentStatus: "paid",
+                        PaymentMethod: "paddle",
+                        PaymentIntentId: transactionId,
+                        userId: user?.id,
+                        updatePrice: quoteData?.quoteData?.update_price,
+                        promoCode: quoteData?.quoteData?.promoCode
+                      }
+                    )
+                  })
                     .then(response => {
-                        if (!response.ok) {
-                            throw new Error("Failed to save document");
-                        }
-                        return response.json();
+                      if (!response.ok) {
+                        throw new Error("Network response was not ok");
+                      }
+                      return response.json();
                     })
                     .then(data => {
-                        localStorage.setItem("aiDocumentContent", docDetails.content);
-                        localStorage.setItem("aiDocumentType", docDetails.prompt.substring(0, 100) + "...");
-                        window.location.href = "/ai-payment-confirmation";
+                      localStorage.removeItem('quoteCreationTimestamp');
+                      window.location.href = "/payment-confirmation";
                     })
                     .catch(error => {
-                        console.error("Error saving AI document:", error);
-                        addNotification({
-                          type: "error",
-                          title: "Document Save Failed",
-                          message: "An error occurred while saving the document. Please try again.",
-                        });
+                      console.error("Error updating quote data:", error);
+                      addNotification({
+                        type: "error",
+                        title: "Quote Update Failed",
+                        message: "An error occurred while updating the quote. Please try again.",
+                      });
                     });
-                } else {
-                    const storedQuoteData = localStorage.getItem("quoteData");
-
-                 
-
-                    if (storedQuoteData) {
-                        const quoteData = JSON.parse(storedQuoteData);
-                        const quoteId = quoteData.id;
-                        fetch(`/api/quotes/${quoteId}`, {
-                            method: 'PUT',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(
-                              { 
-                                PaymentStatus: "paid", 
-                                PaymentMethod: "paddle",
-                                PaymentIntentId: transactionId, 
-                                userId: user?.id,
-                                updatePrice: quoteData?.quoteData?.update_price,
-                                promoCode: quoteData?.quoteData?.promoCode
-                              }
-                            )
-                        })
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error("Network response was not ok");
-                            }
-                            return response.json();
-                        })
-                        .then(data => {
-                            localStorage.removeItem('quoteCreationTimestamp');
-                            window.location.href = "/payment-confirmation";
-                        })
-                        .catch(error => {
-                            console.error("Error updating quote data:", error);
-                            addNotification({
-                              type: "error",
-                              title: "Quote Update Failed",
-                              message: "An error occurred while updating the quote. Please try again.",
-                            });
-                        });
-                    }
                 }
+              }
             }
-        }
+          }
         }).then((paddleInstance: Paddle | undefined) => {
           if (paddleInstance) {
             setPaddle(paddleInstance);
