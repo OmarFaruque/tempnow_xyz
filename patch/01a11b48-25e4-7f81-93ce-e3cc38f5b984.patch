@@ -1,0 +1,5294 @@
+diff --git a/.gitignore b/.gitignore
+index 8c43df2..a2e2b82 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -27,4 +27,6 @@ yarn-error.log*
+ 
+ # typescript
+ *.tsbuildinfo
+-next-env.d.ts
+\ No newline at end of file
++next-env.d.ts
++# local scratch / invoice previews
++/tmp/
+diff --git a/README.md b/README.md
+index 59e2e9e..4d26b97 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,14 @@
+ # tempnow_xyz
++
++## Invoice template
++
++Invoices are generated as vector PDFs by `lib/invoice.ts` (see
++[`lib/invoice/README.md`](lib/invoice/README.md) for the design system and
++configuration reference).
++
++```bash
++pnpm invoice:preview   # render sample invoices to tmp/invoice-preview/
++pnpm invoice:verify    # 57 checks covering helpers, arithmetic and edge cases
++```
++
++Rendered examples: `docs/invoice-template-page-1.png` and `docs/invoice-template-page-2.png`.
+diff --git a/app/api/admin/policies/generate-invoice/route.ts b/app/api/admin/policies/generate-invoice/route.ts
+index 357caa0..a488d52 100644
+--- a/app/api/admin/policies/generate-invoice/route.ts
++++ b/app/api/admin/policies/generate-invoice/route.ts
+@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
+ import { db } from '@/lib/db';
+ import { quotes, users, settings } from '@/lib/schema';
+ import { eq } from 'drizzle-orm';
+-import { generateInvoicePdf } from '@/lib/invoice';
++import { generateInvoicePdf, isInvoicePaid } from '@/lib/invoice';
+ 
+ export async function POST(req: NextRequest) {
+   try {
+@@ -34,16 +34,34 @@ export async function POST(req: NextRequest) {
+ 
+     const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
+     let siteName = "Tempnow";
++    let general: Record<string, any> | null = null;
+     if (generalSettings && generalSettings.value) {
+-        const parsedSettings = JSON.parse(generalSettings.value as string);
+-        siteName = parsedSettings.siteName || "Tempnow";
++        general = typeof generalSettings.value === 'string'
++            ? JSON.parse(generalSettings.value as string)
++            : (generalSettings.value as Record<string, any>);
++        siteName = general?.siteName || "Tempnow";
+     }
+ 
+-    // 3. Generate the invoice PDF
+-    const pdfBytes = await generateInvoicePdf(quoteData, user, policyNumber, siteName);
++    // 3. Generate the invoice PDF. Payment metadata drives the PAID stamp and
++    //    the payment summary, and the settings row provides branding, currency
++    //    and any configured tax/VAT details.
++    const pdfBytes = await generateInvoicePdf(quoteData, user, policyNumber, {
++      siteName,
++      generalSettings: general,
++      payment: {
++        paid: isInvoicePaid(quote.paymentStatus) || isInvoicePaid(quote.status),
++        status: quote.paymentStatus || quote.status,
++        method: quote.paymentMethod,
++        reference: quote.paymentIntentId || quote.spaymentId,
++        date: quote.paymentDate,
++        promoCode: quote.promoCode,
++        listAmount: parseFloat(quote.cpw || '') || null,
++        amount: finalAmount,
++      },
++    });
+ 
+     // 4. Return the PDF as a response
+-    return new NextResponse(pdfBytes, {
++    return new NextResponse(Buffer.from(pdfBytes), {
+       status: 200,
+       headers: {
+         'Content-Type': 'application/pdf',
+diff --git a/app/api/quote-checkout/create-authorize-payment/route.ts b/app/api/quote-checkout/create-authorize-payment/route.ts
+index 8f80f62..0bf9f06 100644
+--- a/app/api/quote-checkout/create-authorize-payment/route.ts
++++ b/app/api/quote-checkout/create-authorize-payment/route.ts
+@@ -228,7 +228,25 @@ export async function POST(req: NextRequest) {
+     const effectivePrice = (quote.updatePrice && quote.updatePrice !== 'false') ? quote.updatePrice : quote.cpw;
+     const finalAmount = parseFloat(effectivePrice || quoteData.total);
+ 
+-    const pdfBytes = await generateInvoicePdf({ ...quoteData, total: finalAmount, paymentDate: quote.paymentDate }, user, quote.policyNumber, siteName);
++    const pdfBytes = await generateInvoicePdf(
++      { ...quoteData, total: finalAmount, paymentDate: quote.paymentDate },
++      user,
++      quote.policyNumber,
++      {
++        siteName,
++        generalSettings,
++        payment: {
++          paid: true,
++          status: 'paid',
++          method: 'authorize',
++          reference: transactionId,
++          date: quote.paymentDate,
++          promoCode: quoteData.promoCode,
++          listAmount: parseFloat(quote.cpw || '') || null,
++          amount: finalAmount,
++        },
++      }
++    );
+ 
+     const vehicle = quoteData.customerData.vehicle;
+     const emailHtml = await createInsurancePolicyEmail(
+diff --git a/app/api/quote-checkout/create-square-payment/route.ts b/app/api/quote-checkout/create-square-payment/route.ts
+index 1bb6b2d..21be4f6 100644
+--- a/app/api/quote-checkout/create-square-payment/route.ts
++++ b/app/api/quote-checkout/create-square-payment/route.ts
+@@ -183,9 +183,11 @@ export async function POST(req: NextRequest) {
+     });
+     let siteName = "";
+     let currency = "GBP"; // Default currency
++    let parsedGeneralSettings: Record<string, any> | null = null;
+     if (generalSettings && generalSettings.value) {
+       const rawGenValue = generalSettings.value;
+       const parsedSettings = typeof rawGenValue === 'string' ? JSON.parse(rawGenValue) : rawGenValue;
++      parsedGeneralSettings = parsedSettings;
+       siteName = parsedSettings.siteName || "TEMPNOW";
+       currency = parsedSettings.currency || "GBP";
+     }
+@@ -231,8 +233,27 @@ export async function POST(req: NextRequest) {
+       const effectivePrice = (quote.updatePrice && quote.updatePrice !== 'false') ? quote.updatePrice : quote.cpw;
+       const finalAmount = parseFloat(effectivePrice || quoteData.total);
+ 
+-      // Generate invoice
+-      const pdfBytes = await generateInvoicePdf({ ...quoteData, total: finalAmount, paymentDate: quote.paymentDate }, user, quote.policyNumber, siteName);
++      // Generate invoice — paid in full with the Square payment id.
++      const pdfBytes = await generateInvoicePdf(
++        { ...quoteData, total: finalAmount, paymentDate: quote.paymentDate },
++        user,
++        quote.policyNumber,
++        {
++          siteName,
++          currency,
++          generalSettings: parsedGeneralSettings,
++          payment: {
++            paid: true,
++            status: 'paid',
++            method: 'square',
++            reference: paymentResult.payment.id,
++            date: quote.paymentDate,
++            promoCode: quoteData.promoCode,
++            listAmount: parseFloat(quote.cpw || '') || null,
++            amount: finalAmount,
++          },
++        }
++      );
+ 
+       // Send confirmation email
+       const vehicle = quoteData.customerData.vehicle;
+diff --git a/app/api/quotes/[id]/route.ts b/app/api/quotes/[id]/route.ts
+index de4c70b..a5c8d45 100644
+--- a/app/api/quotes/[id]/route.ts
++++ b/app/api/quotes/[id]/route.ts
+@@ -66,8 +66,22 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
+     fullQuoteData.total = finalAmount; // Ensure the invoice and email use the final amount
+     fullQuoteData.paymentDate = quote.paymentDate; // Pass payment date to invoice generator
+ 
+-    // 3. Generate invoice
+-    const pdfBytes = await generateInvoicePdf(fullQuoteData, user, quote.policyNumber, siteName);
++    // 3. Generate invoice — paid in full with the gateway's reference so the
++    //    document can act as the customer's receipt.
++    const pdfBytes = await generateInvoicePdf(fullQuoteData, user, quote.policyNumber, {
++      siteName,
++      generalSettings,
++      payment: {
++        paid: true,
++        status: 'paid',
++        method: quote.paymentMethod || PaymentMethod,
++        reference: quote.paymentIntentId || PaymentIntentId || quote.spaymentId,
++        date: quote.paymentDate,
++        promoCode: quote.promoCode,
++        listAmount: parseFloat(quote.cpw || '') || null,
++        amount: finalAmount,
++      },
++    });
+ 
+     // 4. Send confirmation email
+     const vehicle = fullQuoteData.customerData.vehicle;
+diff --git a/app/api/send-confirmation/route.ts b/app/api/send-confirmation/route.ts
+index c42ad3a..9f8faa3 100644
+--- a/app/api/send-confirmation/route.ts
++++ b/app/api/send-confirmation/route.ts
+@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
+ import { quotes, users, settings } from '@/lib/schema';
+ import { eq } from 'drizzle-orm';
+ import { sendEmail, createInsurancePolicyEmail, shouldSuppressPdfAttachmentForDomain } from '@/lib/email';
+-import { generateInvoicePdf } from '@/lib/invoice';
++import { generateInvoicePdf, isInvoicePaid } from '@/lib/invoice';
+ import { revalidatePath } from 'next/cache';
+ 
+ export async function POST(req: NextRequest) {
+@@ -41,8 +41,25 @@ export async function POST(req: NextRequest) {
+ 
+     // 2. Generate invoice
+     const settingsData = await db.select().from(settings).where(eq(settings.param, 'general'));
+-    const siteName = settingsData.length > 0 && settingsData[0].value.siteName ? settingsData[0].value.siteName : 'Tempnow';
+-    const pdfBytes = await generateInvoicePdf(fullQuoteData, user, quote.policyNumber, siteName);
++    const generalSettings = settingsData.length > 0
++        ? (settingsData[0].value as unknown as Record<string, any> | null)
++        : null;
++    const siteName = generalSettings?.siteName ? generalSettings.siteName : 'Tempnow';
++
++    const pdfBytes = await generateInvoicePdf(fullQuoteData, user, quote.policyNumber, {
++      siteName,
++      generalSettings,
++      payment: {
++        paid: isInvoicePaid(quote.paymentStatus) || isInvoicePaid(quote.status),
++        status: quote.paymentStatus || quote.status,
++        method: quote.paymentMethod,
++        reference: quote.paymentIntentId || quote.spaymentId,
++        date: quote.paymentDate,
++        promoCode: quote.promoCode,
++        listAmount: parseFloat(quote.cpw || '') || null,
++        amount: finalAmount,
++      },
++    });
+ 
+     // 3. Send confirmation email
+     const emailData = await createInsurancePolicyEmail(
+diff --git a/docs/invoice-template-edge-case.png b/docs/invoice-template-edge-case.png
+new file mode 100644
+index 0000000..e945fe3
+Binary files /dev/null and b/docs/invoice-template-edge-case.png differ
+diff --git a/docs/invoice-template-page-1.png b/docs/invoice-template-page-1.png
+new file mode 100644
+index 0000000..e5c6c4d
+Binary files /dev/null and b/docs/invoice-template-page-1.png differ
+diff --git a/docs/invoice-template-page-2.png b/docs/invoice-template-page-2.png
+new file mode 100644
+index 0000000..854bfdd
+Binary files /dev/null and b/docs/invoice-template-page-2.png differ
+diff --git a/docs/invoice-template-sample.pdf b/docs/invoice-template-sample.pdf
+new file mode 100644
+index 0000000..c4664bf
+Binary files /dev/null and b/docs/invoice-template-sample.pdf differ
+diff --git a/lib/invoice.ts b/lib/invoice.ts
+index fe104fd..5eda10f 100644
+--- a/lib/invoice.ts
++++ b/lib/invoice.ts
+@@ -1,285 +1,140 @@
+-
+-import { PDFDocument, rgb, StandardFonts, PDFFont } from 'pdf-lib';
+-
+ /**
+- * A robust function to split text into lines that fit within a max width.
+- * This is a corrected implementation.
++ * Invoice generation — public entry point.
++ *
++ * `generateInvoicePdf()` is the stable API used by the checkout flows, the
++ * confirmation emails and the admin panel:
++ *
++ * ```ts
++ * const pdfBytes = await generateInvoicePdf(quoteData, user, policyNumber, siteName);
++ * ```
++ *
++ * The 1500-line drawing code that used to live in this file is now a small
++ * template system:
++ *
++ * | module                | responsibility                                        |
++ * |-----------------------|-------------------------------------------------------|
++ * | `invoice/format.ts`   | text safety, wrapping, money, dates, amount in words  |
++ * | `invoice/branding.ts` | `general` settings → `InvoiceBranding`                |
++ * | `invoice/model.ts`    | quote + user + payment → `InvoiceDocument`            |
++ * | `invoice/primitives.ts`| rounded cards, gradients, seals, vector glyphs       |
++ * | `invoice/render.ts`   | the two-page template                                 |
++ *
++ * The signature stays backwards compatible: the optional fourth argument is
++ * still the site name, and everything new (currency, payment metadata,
++ * branding overrides) is passed via the trailing options object. All extra
++ * arguments are optional, so existing call sites keep working untouched.
+  */
+-function splitTextIntoLines(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
+-    const words = text.split(' ');
+-    if (!words.length) return [];
+-
+-    const lines: string[] = [];
+-    let currentLine = words[0];
+-
+-    for (let i = 1; i < words.length; i++) {
+-        const word = words[i];
+-        const testLine = currentLine + " " + word;
+-        const width = font.widthOfTextAtSize(testLine, fontSize);
+-        if (width < maxWidth) {
+-            currentLine = testLine;
+-        } else {
+-            lines.push(currentLine);
+-            currentLine = word;
+-        }
+-    }
+-    lines.push(currentLine);
+-    return lines;
+-}
+-
+-export async function generateInvoicePdf(quoteData: any, user: any, policyNumber: string, siteName: string) {
+-  const pdfDoc = await PDFDocument.create();
+-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+-
+-  // --- COLORS (from jspdf) ---
+-  const tealColor = rgb(20 / 255, 184 / 255, 166 / 255);
+-  const darkColor = rgb(15 / 255, 23 / 255, 42 / 255);
+-  const grayColor = rgb(100 / 255, 116 / 255, 139 / 255);
+-  const lightGrayColor = rgb(226 / 255, 232 / 255, 240 / 255);
+-  const lightTealBackground = rgb(248 / 255, 250 / 255, 250 / 255);
+-
+-  // --- DIMENSIONS (from jspdf) ---
+-  const mmToPt = 2.83465;
+-  const margin = 20 * mmToPt;
+-
+-  // --- PAGE 1: Invoice ---
+-  const page1 = pdfDoc.addPage();
+-  const { width: pageWidth, height: pageHeight } = page1.getSize();
+-  let yPos: number;
+-
+-  // Header (y starts from top in jspdf, so we subtract from pageHeight)
+-  page1.drawRectangle({
+-    x: 0,
+-    y: pageHeight - (30 * mmToPt),
+-    width: pageWidth,
+-    height: 30 * mmToPt,
+-    color: tealColor,
+-  });
+-  const headerText = siteName.toUpperCase();
+-  const headerTextWidth = boldFont.widthOfTextAtSize(headerText, 24);
+-  page1.drawText(headerText, {
+-    x: (pageWidth - headerTextWidth) / 2,
+-    y: pageHeight - (20 * mmToPt),
+-    font: boldFont,
+-    size: 24,
+-    color: rgb(1, 1, 1),
+-  });
+-
+-  yPos = pageHeight - (50 * mmToPt);
+-
+-  // Invoice Title
+-  page1.drawText('SALES INVOICE', { x: margin, y: yPos, font: boldFont, size: 20, color: darkColor });
+-
+-  // Invoice Details
+-  yPos -= (10 * mmToPt);
+-  page1.drawText(`Invoice #: ${policyNumber}`, { x: margin, y: yPos, font, size: 10, color: grayColor });
+-  yPos -= (5 * mmToPt);
+-  const invoiceDate = quoteData.paymentDate ? new Date(quoteData.paymentDate) : new Date();
+-  const dateStr = `${invoiceDate.toLocaleDateString("en-GB")} - ${invoiceDate.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+-  page1.drawText(`Date: ${dateStr}`, { x: margin, y: yPos, font, size: 10, color: grayColor });
+-
+-  // Invoice To and Deliver To
+-  yPos -= (15 * mmToPt);
+-  const col1X = margin;
+-  const col2X = pageWidth / 2 + (10 * mmToPt);
+-  page1.drawText('INVOICE TO', { x: col1X, y: yPos, font: boldFont, size: 9, color: tealColor });
+-  page1.drawText('DELIVER TO', { x: col2X, y: yPos, font: boldFont, size: 9, color: tealColor });
+-
+-  yPos -= (6 * mmToPt);
+-  const toName = `${quoteData?.nameTitle || ''} ${quoteData.customerData.firstName || ''} ${quoteData.customerData.lastName || ''}`;
+-  const toEmail = user.email || 'N/A';
+-  const toAddress = quoteData.customerData.post_code ? `${quoteData.customerData.address}, ${quoteData.customerData.post_code}` : quoteData.customerData.address || 'N/A';
+-  page1.drawText(toName, { x: col1X, y: yPos, font: boldFont, size: 10, color: darkColor });
+-  page1.drawText(toName, { x: col2X, y: yPos, font: boldFont, size: 10, color: darkColor });
+-  yPos -= (5 * mmToPt);
+-  page1.drawText(toEmail, { x: col1X, y: yPos, font, size: 10, color: grayColor });
+-  page1.drawText(toEmail, { x: col2X, y: yPos, font, size: 10, color: grayColor });
+-  
+-  yPos -= (5 * mmToPt);
+-  const addressMaxWidth = 80 * mmToPt;
+-  const addressLines = splitTextIntoLines(toAddress, font, 10, addressMaxWidth);
+-  let addressStartY = yPos;
+-  for (const line of addressLines) {
+-      page1.drawText(line, { x: col1X, y: addressStartY, font, size: 10, color: grayColor });
+-      page1.drawText(line, { x: col2X, y: addressStartY, font, size: 10, color: grayColor });
+-      addressStartY -= 14; // Approx 5mm line height
+-  }
+-
+-
+-  yPos = addressStartY - (10 * mmToPt); // Adjust yPos for the next section, considering the postcode line
+ 
+-  // Table Header
+-  page1.drawLine({ start: { x: margin, y: yPos }, end: { x: pageWidth - margin, y: yPos }, color: tealColor, thickness: 0.5 });
+-  yPos -= (6 * mmToPt);
+-  
+-  const rightEdge = pageWidth - margin;
+-  page1.drawText('DESCRIPTION', { x: margin, y: yPos, font: boldFont, size: 9, color: darkColor });
+-  
+-  let text = 'AMOUNT';
+-  let textWidth = boldFont.widthOfTextAtSize(text, 9);
+-  page1.drawText(text, { x: rightEdge - textWidth, y: yPos, font: boldFont, size: 9, color: darkColor });
+-  
+-  text = 'UNIT PRICE';
+-  textWidth = boldFont.widthOfTextAtSize(text, 9);
+-  page1.drawText(text, { x: rightEdge - (40 * mmToPt) - textWidth, y: yPos, font: boldFont, size: 9, color: darkColor });
+-  
+-  text = 'QTY';
+-  textWidth = boldFont.widthOfTextAtSize(text, 9);
+-  page1.drawText(text, { x: rightEdge - (60 * mmToPt) - textWidth, y: yPos, font: boldFont, size: 9, color: darkColor });
++import { PDFDocument } from 'pdf-lib';
++import { resolveInvoiceBranding } from './invoice/branding';
++import { buildInvoiceDocument, paymentMethodLabel } from './invoice/model';
++import { renderInvoicePdf } from './invoice/render';
++import type { InvoiceBranding, InvoiceDocument, InvoiceOptions } from './invoice/types';
+ 
+-  yPos -= (3 * mmToPt);
+-  page1.drawLine({ start: { x: margin, y: yPos }, end: { x: rightEdge, y: yPos }, color: lightGrayColor, thickness: 0.5 });
++export type { InvoiceBranding, InvoiceDocument, InvoiceOptions };
++export { buildInvoiceBranding, resolveInvoiceBranding } from './invoice/branding';
++export { buildInvoiceDocument, paymentMethodLabel } from './invoice/model';
++export { renderInvoicePdf } from './invoice/render';
++export * from './invoice/format';
+ 
+-  // Table Rows
+-  yPos -= (8 * mmToPt);
+-  const itemYPos = yPos;
+-  page1.drawText('TEMPNOW Docs', { x: margin, y: itemYPos, font: boldFont, size: 10, color: darkColor });
+-  
+-  yPos -= (5 * mmToPt);
+-  page1.drawText(`Document ID: ${policyNumber}`, { x: margin, y: yPos, font, size: 9, color: grayColor });
++/** Payment statuses that mean "the customer has paid". */
++const PAID_STATUSES = new Set(['paid', 'completed', 'complete', 'succeeded', 'settled', 'captured']);
+ 
+-  const itemQuantity = 1;
+-  const itemRate = quoteData.total;
+-  const itemAmount = itemQuantity * itemRate;
+-
+-  text = `£${(itemAmount).toFixed(2)}`;
+-  textWidth = boldFont.widthOfTextAtSize(text, 10);
+-  page1.drawText(text, { x: rightEdge - textWidth, y: itemYPos, font: boldFont, size: 10, color: darkColor });
+-
+-  text = `£${itemRate.toFixed(2)}`;
+-  textWidth = font.widthOfTextAtSize(text, 10);
+-  page1.drawText(text, { x: rightEdge - (40 * mmToPt) - textWidth, y: itemYPos, font, size: 10, color: darkColor });
+-  
+-  text = itemQuantity.toString();
+-  textWidth = font.widthOfTextAtSize(text, 10);
+-  page1.drawText(text, { x: rightEdge - (60 * mmToPt) - textWidth, y: itemYPos, font, size: 10, color: darkColor });
+-
+-  yPos -= (3 * mmToPt);
+-  page1.drawLine({ start: { x: margin, y: yPos }, end: { x: rightEdge, y: yPos }, color: lightGrayColor, thickness: 0.5 });
+-
+-  // Totals
+-  yPos -= (15 * mmToPt);
+-  const totalsX = rightEdge - (60 * mmToPt);
+-  
+-  page1.drawText('Subtotal:', { x: totalsX, y: yPos, font, size: 10, color: grayColor });
+-  text = `£${itemAmount.toFixed(2)}`;
+-  textWidth = boldFont.widthOfTextAtSize(text, 10);
+-  page1.drawText(text, { x: rightEdge - textWidth, y: yPos, font: boldFont, size: 10, color: darkColor });
+-
+-  yPos -= (10 * mmToPt);
+-  page1.drawLine({ start: { x: totalsX, y: yPos }, end: { x: rightEdge, y: yPos }, color: tealColor, thickness: 0.5 });
+-
+-  yPos -= (8 * mmToPt);
+-  page1.drawText('Total:', { x: totalsX, y: yPos, font: boldFont, size: 12, color: darkColor });
+-  text = `£${itemAmount.toFixed(2)}`;
+-  textWidth = boldFont.widthOfTextAtSize(text, 12);
+-  page1.drawText(text, { x: rightEdge - textWidth, y: yPos, font: boldFont, size: 12, color: tealColor });
+-
+-  // Footer
+-  yPos = 20 * mmToPt;
+-  page1.drawLine({ start: { x: margin, y: yPos }, end: { x: pageWidth - margin, y: yPos }, color: lightGrayColor, thickness: 0.5 });
+-  yPos -= (5 * mmToPt); // CORRECTED: Decrement Y to move down
+-  
+-  text = `© ${new Date().getFullYear()} ${siteName}`;
+-  textWidth = font.widthOfTextAtSize(text, 8);
+-  page1.drawText(text, { x: (pageWidth - textWidth) / 2, y: yPos, font, size: 8, color: grayColor });
+-  
+-  yPos -= (4 * mmToPt); // CORRECTED: Decrement Y to move down
+-  text = 'Please contact us through our website contact page for support.';
+-  textWidth = font.widthOfTextAtSize(text, 8);
+-  page1.drawText(text, { x: (pageWidth - textWidth) / 2, y: yPos, font, size: 8, color: grayColor });
++/**
++ * Whether an invoice/receipt should be watermarked and sealed as paid.
++ * Accepts either the raw status string or the `payment` block of `InvoiceOptions`.
++ */
++export function isInvoicePaid(source: unknown): boolean {
++    if (!source) return false;
+ 
++    if (typeof source === 'string') {
++        return PAID_STATUSES.has(source.trim().toLowerCase());
++    }
+ 
+-  // --- PAGE 2: Instructions ---
+-  const page2 = pdfDoc.addPage();
+-  const { width: pageWidth2, height: pageHeight2 } = page2.getSize();
++    const payment = source as NonNullable<InvoiceOptions['payment']>;
++    if (payment.paid === true) return true;
+ 
+-  // Header
+-  page2.drawRectangle({ x: 0, y: pageHeight2 - (30 * mmToPt), width: pageWidth2, height: 30 * mmToPt, color: tealColor });
+-  const headerText2 = siteName.toUpperCase();
+-  const headerTextWidth2 = boldFont.widthOfTextAtSize(headerText2, 24);
+-  page2.drawText(headerText2, { x: (pageWidth2 - headerTextWidth2) / 2, y: pageHeight2 - (20 * mmToPt), font: boldFont, size: 24, color: rgb(1, 1, 1) });
++    return PAID_STATUSES.has(String(payment.status ?? '').trim().toLowerCase());
++}
+ 
+-  yPos = pageHeight2 - (50 * mmToPt);
++interface SellerContext {
++    /** Site name from the `general` settings row (legacy argument). */
++    siteName?: string;
++    /** Raw `general` settings row, when the caller already loaded it. */
++    generalSettings?: Record<string, any> | null;
++    currency?: string;
++    /** Quote row fields the invoice needs but that are not in `quoteData`. */
++    payment?: InvoiceOptions['payment'];
++    /** Anything else the caller wants to override (branding, issue date, ...). */
++    options?: InvoiceOptions;
++}
+ 
+-  // Title
+-  page2.drawText('Document Access Instructions', { x: margin, y: yPos, font: boldFont, size: 16, color: darkColor });
+-  yPos -= (10 * mmToPt);
+-  page2.drawText('You can access your documents in two ways:', { x: margin, y: yPos, font: boldFont, size: 10, color: darkColor });
+-  yPos -= (10 * mmToPt);
++/**
++ * Build the invoice PDF as a `Uint8Array`.
++ *
++ * @param quoteData   Parsed quote JSON (`quote.quoteData`), or a merged object.
++ * @param user        User row owning the quote.
++ * @param policyNumber Policy / invoice number.
++ * @param siteNameOrContext Site name (legacy) or a context object.
++ * @param extraOptions Optional `InvoiceOptions`.
++ */
++export async function generateInvoicePdf(
++    quoteData: any,
++    user: any,
++    policyNumber: string,
++    siteNameOrContext?: string | SellerContext,
++    extraOptions?: InvoiceOptions
++): Promise<Uint8Array> {
++    const context: SellerContext =
++        typeof siteNameOrContext === 'string' || siteNameOrContext === undefined
++            ? { siteName: siteNameOrContext }
++            : siteNameOrContext || {};
++
++    const options: InvoiceOptions = {
++        ...(context.options || {}),
++        ...(extraOptions || {}),
++    };
++
++    if (!options.currency && context.currency) options.currency = context.currency;
++    if (!options.payment && context.payment) options.payment = context.payment;
++
++    const brandingOverrides: Partial<InvoiceBranding> = { ...(options.branding || {}) };
++    if (context.siteName && !brandingOverrides.siteName) {
++        brandingOverrides.siteName = context.siteName;
++    }
+ 
+-  // Option 1
+-  page2.drawCircle({ x: margin + (3 * mmToPt), y: yPos - (2 * mmToPt), size: 3 * mmToPt, color: tealColor });
+-  page2.drawText('1', { x: margin + (3 * mmToPt) - (boldFont.widthOfTextAtSize('1', 8)/2) , y: yPos - (2 * mmToPt) - 3, font: boldFont, size: 8, color: rgb(1, 1, 1) });
+-  page2.drawText('Account Dashboard', { x: margin + (10 * mmToPt), y: yPos, font: boldFont, size: 10, color: darkColor });
+-  yPos -= (5 * mmToPt);
+-  const text1 = 'Log in to your account and navigate to your dashboard where all your purchased documents are available for download.';
+-  const text1MaxWidth = pageWidth2 - margin * 2 - (10 * mmToPt);
+-  const text1Lines = splitTextIntoLines(text1, font, 10, text1MaxWidth);
+-  for (const line of text1Lines) {
+-    page2.drawText(line, { x: margin + (10 * mmToPt), y: yPos, font, size: 10, color: grayColor });
+-    yPos -= 14; // Approx 5mm
+-  }
+-  yPos += 14 - (text1Lines.length * 5 * mmToPt) - (5 * mmToPt);
++    const branding = await resolveInvoiceBranding(
++        brandingOverrides,
++        context.generalSettings ?? undefined
++    );
+ 
+-  // Option 2
+-  page2.drawCircle({ x: margin + (3 * mmToPt), y: yPos - (2 * mmToPt), size: 3 * mmToPt, color: tealColor });
+-  page2.drawText('2', { x: margin + (3 * mmToPt) - (boldFont.widthOfTextAtSize('2', 8)/2), y: yPos - (2 * mmToPt) - 3, font: boldFont, size: 8, color: rgb(1, 1, 1) });
+-  page2.drawText('Confirmation Email', { x: margin + (10 * mmToPt), y: yPos, font: boldFont, size: 10, color: darkColor });
+-  yPos -= (5 * mmToPt);
+-  const text2 = 'Click the "View Documents" button in the confirmation email sent to your registered email address for instant access.';
+-  const text2MaxWidth = pageWidth2 - margin * 2 - (10 * mmToPt);
+-  const text2Lines = splitTextIntoLines(text2, font, 10, text2MaxWidth);
+-  for (const line of text2Lines) {
+-    page2.drawText(line, { x: margin + (10 * mmToPt), y: yPos, font, size: 10, color: grayColor });
+-    yPos -= 14; // Approx 5mm
+-  }
+-  yPos += 14 - (text2Lines.length * 5 * mmToPt) - (10 * mmToPt);
++    const payment = {
++        ...options.payment,
++        paid: options.payment?.paid ?? isInvoicePaid(options.payment?.status),
++    };
+ 
+-  // Important Information Box
+-  const boxHeight = 70 * mmToPt;
+-  const boxWidth = pageWidth2 - margin * 2;
+-  const boxY = yPos;
+-  page2.drawRectangle({ x: margin, y: boxY - boxHeight, width: boxWidth, height: boxHeight, color: lightTealBackground, borderColor: tealColor, borderWidth: 0.5, cornerRadius: 3 * mmToPt });
+-  
+-  yPos = boxY - (8 * mmToPt);
+-  page2.drawText('Important Information', { x: margin + (5 * mmToPt), y: yPos, font: boldFont, size: 12, color: darkColor });
+-  yPos -= (8 * mmToPt);
+-  
+-  const bulletPoints = [
+-    "This is a digital document service. No physical items will be shipped.",
+-    "All documents are delivered electronically and are available immediately after payment confirmation.",
+-    "Refund Policy: We offer a full refund within 7 days of purchase if you experience any technical issues that prevent you from accessing or using your documents as intended.",
+-    "For technical support or refund requests, please contact our support team through the contact page on our website.",
+-  ];
++    const document = buildInvoiceDocument({
++        quoteData,
++        user,
++        policyNumber,
++        branding,
++        options: { ...options, payment },
++    });
+ 
+-  const bulletMaxWidth = boxWidth - (15 * mmToPt);
+-  for (const point of bulletPoints) {
+-    page2.drawText('•', { x: margin + (5 * mmToPt), y: yPos, font, size: 10, color: tealColor });
+-    const pointLines = splitTextIntoLines(point, font, 9, bulletMaxWidth);
+-    let pointLineY = yPos;
+-    for (const line of pointLines) {
+-        page2.drawText(line, { x: margin + (10 * mmToPt), y: pointLineY, font, size: 9, color: grayColor });
+-        pointLineY -= 11; // Approx 4mm
+-    }
+-    yPos = pointLineY + 11 - (pointLines.length * 4 * mmToPt) - (2 * mmToPt);
+-  }
++    const pdf = await PDFDocument.create();
++    await renderInvoicePdf(pdf, { document, branding });
+ 
+-  // Footer
+-  yPos = 20 * mmToPt;
+-  page2.drawLine({ start: { x: margin, y: yPos }, end: { x: pageWidth2 - margin, y: yPos }, color: lightGrayColor, thickness: 0.5 });
+-  yPos -= (5 * mmToPt);
+-  
+-  text = `© ${new Date().getFullYear()} ${siteName}`;
+-  textWidth = font.widthOfTextAtSize(text, 8);
+-  page2.drawText(text, { x: (pageWidth2 - textWidth) / 2, y: yPos, font, size: 8, color: grayColor });
+-  
+-  yPos -= (4 * mmToPt);
+-  text = 'For support, visit our website contact page';
+-  textWidth = font.widthOfTextAtSize(text, 8);
+-  page2.drawText(text, { x: (pageWidth2 - textWidth) / 2, y: yPos, font, size: 8, color: grayColor });
++    return pdf.save();
++}
+ 
+-  const pdfBytes = await pdfDoc.save();
+-  return pdfBytes;
++/** Create an invoice PDF as a Node `Buffer` (for email attachments). */
++export async function generateInvoiceBuffer(
++    quoteData: any,
++    user: any,
++    policyNumber: string,
++    siteNameOrContext?: string | SellerContext,
++    extraOptions?: InvoiceOptions
++): Promise<Buffer> {
++    const bytes = await generateInvoicePdf(quoteData, user, policyNumber, siteNameOrContext, extraOptions);
++    return Buffer.from(bytes);
+ }
+diff --git a/lib/invoice/README.md b/lib/invoice/README.md
+new file mode 100644
+index 0000000..c405838
+--- /dev/null
++++ b/lib/invoice/README.md
+@@ -0,0 +1,131 @@
++# Invoice template
++
++Design and generation for every invoice PDF the platform produces — checkout
++confirmations, admin re-downloads and the confirmation email attachment.
++
++```
++Invoice-P-…pdf        lib/invoice.ts                     ← public API
++   ▲                        │
++   │                        ├── lib/invoice/format.ts    text safety, wrapping, money, dates, words
++   │                        ├── lib/invoice/branding.ts  `general` settings → InvoiceBranding
++   │                        ├── lib/invoice/model.ts     quote + user + payment → InvoiceDocument
++   │  rendered by           ├── lib/invoice/theme.ts     palette / type scale / metrics
++   │                        ├── lib/invoice/primitives.ts rounded cards, waves, seals, glyphs
++   └────────────────────────lib/invoice/render.ts       the two-page template
++```
++
++## Using it
++
++```ts
++import { generateInvoicePdf, isInvoicePaid } from '@/lib/invoice';
++
++const bytes = await generateInvoicePdf(quoteData, user, quote.policyNumber, {
++    siteName,                       // optional, kept for backwards compatibility
++    generalSettings,                // the `general` settings row, when already loaded
++    currency,                       // optional override
++    payment: {
++        paid: isInvoicePaid(quote.status),
++        method: quote.paymentMethod,      // 'stripe' | 'square' | 'authorize' | …
++        reference: quote.paymentIntentId, // gateway transaction id
++        date: quote.paymentDate,
++        promoCode: quote.promoCode,
++        listAmount: Number(quote.cpw),    // pre-discount price
++        amount: finalAmount,              // what was actually charged
++    },
++});
++```
++
++The legacy signature still works unchanged — the fourth argument may be a plain
++site name string, and everything new is optional:
++
++```ts
++const pdfBytes = await generateInvoicePdf(quoteData, user, policyNumber, siteName);
++```
++
++The return value is a `Uint8Array` (accepted by `NextResponse`, `Buffer.from()`
++and email attachments alike). `generateInvoiceBuffer()` returns a `Buffer`.
++
++## What the document contains
++
++**Page 1 — the invoice**
++
++| Block | Notes |
++| --- | --- |
++| Masthead | Brand gradient, aurora waves, ticket-perforated edge, logo plate, document title, status chip |
++| Billed to / Invoice details | Customer block and invoice number, issue date, due date, payment method and reference |
++| Policy & vehicle | Vehicle, registration, cover period, cover reason, licence |
++| Amount card | Total, amount in words, tax note, wax-seal PAID / DUE stamp |
++| Charges table | Description, quantity, unit price, amount; discount rows are highlighted; continues onto new pages when long |
++| Totals | Subtotal, discount, tax, total, amount paid, balance due (dark pill echoes the hero card) |
++| Footer | Legal entity, registration/VAT, support email, website, page number, generation timestamp |
++
++**Page 2 — documents & cover information**
++
++Recap card, payment summary + terms, "how to access your documents" steps,
++"what's included" checklist, "important information" bullets and a help card.
++
++## Design system
++
++- `lib/invoice/theme.ts` holds every colour, size and spacing value. The brand
++  colour (and its darker/lighter shades and readable text colour) come from the
++  `general` settings row, so each deployment's invoice is branded automatically.
++- `lib/invoice/primitives.ts` provides the drawn elements: `drawCard()`
++  (rounded rectangles), `drawGradientBand()`, `drawWave()`, `drawPerforation()`,
++  `drawSeal()`, `drawCheck()`, `drawSparkle()`, plus text helpers such as
++  `drawTracked()` for letter-spaced uppercase labels.
++- **Coordinate convention:** everything public takes *top-based* `top`
++  coordinates, so template code reads top-to-bottom. `fromTop()` converts to
++  pdf-lib's bottom-based axis.
++- **pdf-lib gotcha:** `drawSvgPath()` mirrors the SVG y axis, so a path grows
++  *downwards* from its origin. Use `drawWave()`/`drawCard()` instead of calling
++  `drawSvgPath()` directly. Setting `borderWidth` without a `borderColor` makes
++  pdf-lib stroke in black — `drawCard()` only passes a width when a colour is set.
++
++## Configuration (Admin → Settings → General)
++
++| Setting | Effect on the invoice |
++| --- | --- |
++| `siteName`, `companyName` | Wordmark and legal entity name |
++| `logo` | Embedded logo (PNG/JPEG, `https://…` or `/uploads/…`); falls back to a typographic wordmark |
++| `brandColor` | Gradient, accents, seal ring, highlights |
++| `currency` | ISO code used for all money (`GBP` → `£`, `AED` → `AED`) |
++| `timezone` | Date and time formatting |
++| `companyAddress`, `companyRegistration`, `supportEmail`, `companyPhone`, `siteDomain` | Seller block and footer |
++| `vatNumber` / `trn` / `taxNumber` | Switches the title to `TAX INVOICE` and prints the tax reference |
++| `invoiceTaxRate`, `invoiceTaxLabel`, `invoiceTaxInclusive`, `invoiceTaxNote` | Optional tax line (VAT, Insurance Premium Tax, …) |
++| `invoiceDueDays` | Due date for unpaid invoices |
++| `invoiceTerms`, `invoiceFooterNote`, `invoiceTitle` | Text overrides |
++
++No configuration is required: without a tax rate the invoice simply has no tax
++line, and `title` defaults to `INVOICE`.
++
++## Money & robustness rules
++
++- Text is sanitised for the standard PDF fonts (`safeText`): emoji, Cyrillic and
++  Arabic are dropped instead of throwing `UnsupportedEncodingError`, which used
++  to fail the whole transaction. Non-Latin characters degrade gracefully.
++- The arithmetic always balances, because the totals are derived from the amount
++  actually charged: `subtotal - discount + tax = total`, `total - paid = balance due`.
++- Long values wrap or truncate instead of overlapping; the totals block moves to
++  a new page rather than colliding with the footer.
++
++## Visual reference
++
++Rendered samples live in `docs/` (regenerate with `pnpm invoice:preview`):
++
++| File | Shows |
++| --- | --- |
++| `docs/invoice-template-page-1.png` | Page 1 — the invoice itself |
++| `docs/invoice-template-page-2.png` | Page 2 — documents & cover information |
++| `docs/invoice-template-edge-case.png` | Unicode names, long values, 12% inclusive tax, £1,212.05 |
++| `docs/invoice-template-sample.pdf` | The full two-page PDF |
++
++## Working on the template
++
++```bash
++pnpm invoice:preview   # writes tmp/invoice-preview/*.pdf (paid, unpaid, tax, edge case)
++pnpm invoice:verify    # 57 checks: helpers, arithmetic, page counts, adversarial inputs
++```
++
++`scripts/preview-invoice.ts` renders without a database, so design changes can
++be reviewed from a single command.
+diff --git a/lib/invoice/assets.ts b/lib/invoice/assets.ts
+new file mode 100644
+index 0000000..aa37a6e
+--- /dev/null
++++ b/lib/invoice/assets.ts
+@@ -0,0 +1,122 @@
++/**
++ * Logo loading for invoices.
++ *
++ * The renderer embeds the site logo when it can find it, and silently falls
++ * back to a typographic wordmark when it cannot — an unreachable CDN or a
++ * missing upload must never stop an invoice from being generated (it used to
++ * fail the whole confirmation email).
++ */
++
++import { promises as fs } from 'node:fs';
++import path from 'node:path';
++import type { PDFDocument, PDFImage } from 'pdf-lib';
++
++const FETCH_TIMEOUT_MS = 6000;
++const MAX_LOGO_BYTES = 4 * 1024 * 1024;
++
++export interface InvoiceLogo {
++    image: PDFImage;
++    /** Natural aspect ratio (width / height). */
++    aspect: number;
++}
++
++function guessType(url: string, contentType: string | null): 'png' | 'jpg' | null {
++    const type = (contentType || '').toLowerCase();
++    if (type.includes('png')) return 'png';
++    if (type.includes('jpeg') || type.includes('jpg') || type.includes('pjpeg')) return 'jpg';
++
++    const ext = path.extname(url.split('?')[0]).toLowerCase();
++    if (ext === '.png') return 'png';
++    if (ext === '.jpg' || ext === '.jpeg') return 'jpg';
++
++    // SVG logos cannot be embedded by pdf-lib and would need rasterising.
++    return null;
++}
++
++async function readLocalFile(url: string): Promise<Buffer | null> {
++    try {
++        const clean = decodeURIComponent(url.split('?')[0]);
++        const absolute = path.join(process.cwd(), 'public', clean.replace(/^\/+/, ''));
++        const buffer = await fs.readFile(absolute);
++        if (buffer.byteLength > MAX_LOGO_BYTES) return null;
++        return buffer;
++    } catch {
++        return null;
++    }
++}
++
++async function fetchRemote(url: string): Promise<{ buffer: Buffer; contentType: string | null } | null> {
++    if (!/^https?:\/\//i.test(url)) return null;
++
++    const controller = new AbortController();
++    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
++
++    try {
++        const response = await fetch(url, {
++            signal: controller.signal,
++            cache: 'no-store',
++            headers: { accept: 'image/png,image/jpeg,image/*' },
++        });
++        if (!response.ok) return null;
++
++        const buffer = Buffer.from(await response.arrayBuffer());
++        if (!buffer.byteLength || buffer.byteLength > MAX_LOGO_BYTES) return null;
++
++        return { buffer, contentType: response.headers.get('content-type') };
++    } catch {
++        return null;
++    } finally {
++        clearTimeout(timer);
++    }
++}
++
++/**
++ * Try to load and embed the site logo. Returns `null` when unavailable so the
++ * caller can render a wordmark instead.
++ */
++export async function loadInvoiceLogo(
++    pdf: PDFDocument,
++    logoUrl: string
++): Promise<InvoiceLogo | null> {
++    const url = (logoUrl || '').trim();
++    if (!url || url.startsWith('data:')) return null;
++
++    try {
++        let buffer: Buffer | null = null;
++        let contentType: string | null = null;
++
++        if (/^https?:\/\//i.test(url)) {
++            const remote = await fetchRemote(url);
++            if (remote) {
++                buffer = remote.buffer;
++                contentType = remote.contentType;
++            } else {
++                // Some deployments point the logo at their own origin; if the
++                // fetch fails, the file may still exist under /public.
++                try {
++                    const parsed = new URL(url);
++                    buffer = await readLocalFile(parsed.pathname);
++                    contentType = null;
++                } catch {
++                    buffer = null;
++                }
++            }
++        } else {
++            buffer = await readLocalFile(url);
++        }
++
++        if (!buffer) return null;
++
++        const type = guessType(url, contentType);
++        if (!type) return null;
++
++        const image = type === 'png' ? await pdf.embedPng(buffer) : await pdf.embedJpg(buffer);
++        const width = image.width || 1;
++        const height = image.height || 1;
++
++        return { image, aspect: width / height };
++    } catch (error) {
++        console.error('Invoice logo could not be embedded, falling back to wordmark.', error);
++        return null;
++    }
++}
+diff --git a/lib/invoice/branding.ts b/lib/invoice/branding.ts
+new file mode 100644
+index 0000000..450afd7
+--- /dev/null
++++ b/lib/invoice/branding.ts
+@@ -0,0 +1,198 @@
++/**
++ * Branding resolution for invoices.
++ *
++ * Every deployment keeps its own identity in the `general` settings row
++ * (siteName, companyName, logo, brandColor, currency, timezone, ...). This
++ * module turns that row — plus environment fallbacks — into a single
++ * `InvoiceBranding` object, so the PDF template never has to know where its
++ * colours and labels come from and every site automatically gets its own,
++ * fully branded invoice.
++ *
++ * The database read is wrapped in a try/catch on purpose: an invoice must
++ * still be produced (with sensible defaults) if settings cannot be loaded.
++ */
++
++import {
++    getContrastTextColor,
++    normalizeSiteUrl,
++    sanitizeHexColor,
++    shadeHexColor,
++    tintHexColor,
++} from '@/core/helpers';
++import { currencySymbol, parseAmount, safeText } from './format';
++import { DEFAULT_BRAND_COLOR } from './theme';
++import type { InvoiceBranding } from './types';
++
++const UAE_CURRENCIES = new Set(['AED', 'SAR', 'QAR', 'KWD', 'OMR', 'BHD']);
++
++function str(value: unknown): string {
++    return safeText(value);
++}
++
++function firstString(...values: unknown[]): string {
++    for (const value of values) {
++        const text = str(value);
++        if (text) return text;
++    }
++    return '';
++}
++
++function toLines(value: unknown): string[] {
++    if (Array.isArray(value)) {
++        return value.map((line) => str(line)).filter(Boolean);
++    }
++    const text = str(value);
++    if (!text) return [];
++    return text
++        .split(/\n|\s*\|\s*/)
++        .map((line) => line.trim())
++        .filter(Boolean);
++}
++
++function toRate(value: unknown, max = 100): number {
++    const rate = parseAmount(value);
++    if (rate === null || rate < 0) return 0;
++    return Math.min(rate, max);
++}
++
++function toPositiveInt(value: unknown, fallback: number): number {
++    const parsed = parseAmount(value);
++    if (parsed === null || parsed < 0) return fallback;
++    return Math.round(parsed);
++}
++
++/** Resolve a relative logo path (`/uploads/logo.png`) against the site URL. */
++function resolveAssetUrl(path: string, siteUrl: string): string {
++    if (!path) return '';
++    if (/^(https?:)?\/\//i.test(path) || path.startsWith('data:')) return path;
++    if (!siteUrl) return path;
++    return `${siteUrl}${path.startsWith('/') ? '' : '/'}${path}`;
++}
++
++/**
++ * Build the invoice branding from a `general` settings object.
++ * Exported for tests and for callers that already loaded the settings row.
++ */
++export function buildInvoiceBranding(
++    general: Record<string, any> | null | undefined,
++    overrides: Partial<InvoiceBranding> = {}
++): InvoiceBranding {
++    const g = (general || {}) as Record<string, any>;
++
++    const siteName = firstString(
++        g.siteName,
++        process.env.NEXT_PUBLIC_SITE_NAME,
++        process.env.APP_TITLE,
++        'Tempnow'
++    );
++    const companyName = firstString(g.companyName, process.env.EMAIL_COMPANY_NAME, siteName);
++
++    const primaryColor = sanitizeHexColor(
++        g.brandColor || g.primaryColor || process.env.EMAIL_BRAND_COLOR || process.env.NEXT_PUBLIC_BRAND_COLOR,
++        DEFAULT_BRAND_COLOR
++    );
++
++    const siteUrl = normalizeSiteUrl(
++        firstString(g.siteDomain, g.seoCanonicalUrl, process.env.NEXT_PUBLIC_BASE_URL, process.env.NEXT_PUBLIC_SITE_URL, process.env.VERCEL_URL)
++    );
++
++    const jurisdiction = firstString(g.activeJurisdiction, 'uk').toLowerCase();
++    const configuredCurrency = firstString(g.currency).toUpperCase();
++    const currency =
++        configuredCurrency ||
++        (jurisdiction.includes('uae') ? 'AED' : 'GBP');
++
++    const vatNumber = firstString(g.vatNumber, g.trn, g.taxNumber, g.companyTaxNumber);
++
++    const taxRate = toRate(g.invoiceTaxRate ?? g.taxRate);
++    const taxInclusive = g.invoiceTaxInclusive === true || g.taxInclusive === true;
++    const taxLabel =
++        firstString(g.invoiceTaxLabel, g.taxLabel) ||
++        (jurisdiction.includes('uae') ? 'VAT' : 'Insurance Premium Tax');
++
++    const taxNote =
++        firstString(g.invoiceTaxNote) ||
++        (taxRate > 0 || taxInclusive
++            ? `${taxLabel} is included in the premium shown above where applicable.`
++            : '');
++
++    const isUae = jurisdiction.includes('uae');
++
++    const branding: InvoiceBranding = {
++        siteName,
++        companyName,
++        companyAddressLines: toLines(g.companyAddress || g.invoiceCompanyAddress),
++        companyRegistration: firstString(g.companyRegistration, g.registrationNumber),
++        vatNumber,
++        supportEmail: firstString(g.supportEmail, process.env.SUPPORT_EMAIL),
++        companyPhone: firstString(g.companyPhone, g.phone, g.supportPhone),
++        siteUrl,
++        logoUrl: resolveAssetUrl(firstString(g.logo, process.env.EMAIL_LOGO_URL), siteUrl),
++        primaryColor,
++        primaryColorDark: shadeHexColor(primaryColor, isUae ? 0.38 : 0.55),
++        primaryColorSoft: tintHexColor(primaryColor, 0.93),
++        onPrimaryColor: getContrastTextColor(primaryColor),
++        currency,
++        timezone: firstString(g.timezone, isUae ? 'Asia/Dubai' : 'Europe/London'),
++        taxRate,
++        taxLabel,
++        taxInclusive,
++        taxNote,
++        dueDays: toPositiveInt(g.invoiceDueDays, 0),
++        terms:
++            firstString(g.invoiceTerms) ||
++            'Documents are delivered electronically and are available immediately after payment confirmation. Refunds are available within 7 days of purchase where a technical issue prevents you from accessing your documents as intended.',
++        footerNote:
++            firstString(g.invoiceFooterNote) ||
++            'This is a computer-generated invoice and is valid without a signature.',
++        documentTitle: '',
++        jurisdiction,
++    };
++
++    branding.documentTitle =
++        firstString(g.invoiceTitle) ||
++        (vatNumber ? 'TAX INVOICE' : 'INVOICE');
++
++    return { ...branding, ...overrides };
++}
++
++/**
++ * Load the `general` settings row and build the invoice branding for the
++ * current site. Never throws — falls back to environment branding defaults.
++ */
++export async function resolveInvoiceBranding(
++    overrides: Partial<InvoiceBranding> = {},
++    preloadedGeneral?: Record<string, any> | null
++): Promise<InvoiceBranding> {
++    let general = preloadedGeneral ?? null;
++
++    if (!preloadedGeneral) {
++        try {
++            // Imported lazily so pure rendering (previews, tests, scripts)
++            // never needs a database connection.
++            const [{ db }, { settings }, { eq }] = await Promise.all([
++                import('@/lib/db'),
++                import('@/lib/schema'),
++                import('drizzle-orm'),
++            ]);
++
++            const row = await db.query.settings.findFirst({
++                where: eq(settings.param, 'general'),
++            });
++            const value = row?.value;
++            if (value && typeof value === 'object') {
++                general = value as Record<string, any>;
++            } else if (typeof value === 'string') {
++                general = JSON.parse(value) as Record<string, any>;
++            }
++        } catch (error) {
++            console.error('Invoice branding: could not read site settings, using defaults.', error);
++            general = null;
++        }
++    }
++
++    return buildInvoiceBranding(general, overrides);
++}
++
++/** Convenience re-export so callers can format money with the same symbol. */
++export { currencySymbol };
+diff --git a/lib/invoice/format.ts b/lib/invoice/format.ts
+new file mode 100644
+index 0000000..4bd470c
+--- /dev/null
++++ b/lib/invoice/format.ts
+@@ -0,0 +1,414 @@
++/**
++ * Text, number, currency and date helpers for the invoice renderer.
++ *
++ * Invoices are printed documents: every string that ends up in the PDF must be
++ * safe for the standard PDF fonts (WinAnsi / CP1252). Quote data comes from
++ * customer filled forms, so it routinely contains emojis, non-breaking spaces,
++ * Cyrillic/Arabic names and smart quotes. Drawing those with `Helvetica`
++ * throws `UnsupportedEncodingError` inside pdf-lib, which used to take the
++ * whole invoice (and the confirmation email around it) down. Everything that
++ * reaches `page.drawText()` therefore goes through `safeText()` first.
++ */
++
++import type { PDFFont } from 'pdf-lib';
++
++/* ------------------------------------------------------------------------ */
++/* Text sanitising                                                           */
++/* ------------------------------------------------------------------------ */
++
++/** Characters CP1252 encodes on top of plain ASCII and Latin-1. */
++const CP1252_EXTRAS = new Set<number>([
++    0x20ac, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030,
++    0x0160, 0x2039, 0x0152, 0x017d, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
++    0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x017e, 0x0178,
++]);
++
++/**
++ * Coerce any value into a string the standard PDF fonts can encode.
++ *
++ * - `null` / `undefined` become `fallback`
++ * - non-breaking and zero-width characters become plain spaces / are dropped
++ * - emoji and scripts outside CP1252 are removed instead of throwing
++ */
++export function safeText(value: unknown, fallback = ''): string {
++    if (value === null || value === undefined) return fallback;
++
++    const raw = typeof value === 'string' ? value : String(value);
++    let out = '';
++
++    for (const ch of raw) {
++        const cp = ch.codePointAt(0) as number;
++
++        if (cp === 9 || cp === 10 || cp === 13) {
++            out += ' ';
++            continue;
++        }
++        if (cp < 32) continue;
++        if (cp === 0xa0 || cp === 0x2007 || cp === 0x202f) {
++            out += ' ';
++            continue;
++        }
++        if (
++            (cp >= 0x200b && cp <= 0x200f) ||
++            cp === 0x2028 ||
++            cp === 0x2029 ||
++            cp === 0xfeff
++        ) {
++            continue;
++        }
++        if (cp <= 0x7e || (cp >= 0xa0 && cp <= 0xff) || CP1252_EXTRAS.has(cp)) {
++            out += ch;
++        }
++        // Anything else (emoji, CJK, Arabic, Cyrillic, ...) is dropped: the
++        // invoice keeps rendering instead of failing the whole transaction.
++    }
++
++    return out.replace(/[ ]{2,}/g, ' ').trim();
++}
++
++/** `safeText()` with a `—` for empty values (handy for table cells). */
++export function safeTextOr(value: unknown, dash = '-'): string {
++    const text = safeText(value);
++    return text.length ? text : dash;
++}
++
++export function hasText(value: unknown): boolean {
++    return safeText(value).length > 0;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Measuring / wrapping                                                      */
++/* ------------------------------------------------------------------------ */
++
++export function measureText(text: string, font: PDFFont, size: number): number {
++    try {
++        return font.widthOfTextAtSize(text, size);
++    } catch {
++        return 0;
++    }
++}
++
++/**
++ * Greedy word wrap that never loses characters: words that are wider than the
++ * available width are hard-split, explicit `\n` starts a new line.
++ */
++export function wrapText(
++    text: unknown,
++    font: PDFFont,
++    size: number,
++    maxWidth: number
++): string[] {
++    const clean = safeText(text);
++    if (!clean) return [];
++
++    const lines: string[] = [];
++
++    for (const paragraph of clean.split(/\n+/)) {
++        const words = paragraph.split(' ').filter(Boolean);
++        let current = '';
++
++        for (const word of words) {
++            const candidate = current ? `${current} ${word}` : word;
++
++            if (measureText(candidate, font, size) <= maxWidth) {
++                current = candidate;
++                continue;
++            }
++
++            if (current) lines.push(current);
++
++            if (measureText(word, font, size) <= maxWidth) {
++                current = word;
++                continue;
++            }
++
++            // Single word wider than the column: split it character by character.
++            let chunk = '';
++            for (const ch of word) {
++                if (measureText(chunk + ch, font, size) > maxWidth && chunk) {
++                    lines.push(chunk);
++                    chunk = ch;
++                } else {
++                    chunk += ch;
++                }
++            }
++            current = chunk;
++        }
++
++        if (current) lines.push(current);
++    }
++
++    return lines;
++}
++
++/** Shorten a string to `maxWidth`, appending `…` when it had to be cut. */
++export function truncate(text: unknown, font: PDFFont, size: number, maxWidth: number): string {
++    const clean = safeText(text);
++    if (measureText(clean, font, size) <= maxWidth) return clean;
++
++    const ellipsis = '...';
++    let cut = clean;
++    while (cut.length > 1 && measureText(cut + ellipsis, font, size) > maxWidth) {
++        cut = cut.slice(0, -1);
++    }
++    return cut.replace(/[\s.,;:-]+$/, '') + ellipsis;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Numbers & money                                                           */
++/* ------------------------------------------------------------------------ */
++
++/** Parse `"399.99"`, `399.99`, `"£399.99"`, `null`, `undefined` → number. */
++export function parseAmount(value: unknown): number | null {
++    if (typeof value === 'number') {
++        return Number.isFinite(value) ? value : null;
++    }
++    if (typeof value === 'string') {
++        const cleaned = value.replace(/[^0-9.,-]/g, '').replace(/,/g, '');
++        if (!cleaned) return null;
++        const parsed = Number.parseFloat(cleaned);
++        return Number.isFinite(parsed) ? parsed : null;
++    }
++    return null;
++}
++
++const CURRENCY_SYMBOLS: Record<string, string> = {
++    GBP: '£',
++    USD: '$',
++    EUR: '€',
++    AED: 'AED',
++    SAR: 'SAR',
++    QAR: 'QAR',
++    KWD: 'KWD',
++    OMR: 'OMR',
++    BHD: 'BHD',
++    INR: '₹',
++    PKR: 'PKR',
++    AUD: 'A$',
++    CAD: 'C$',
++    NZD: 'NZ$',
++    CHF: 'CHF',
++    JPY: '¥',
++};
++
++/**
++ * Symbol for an ISO currency code. Codes without a CP1252 glyph (AED, SAR,
++ * ...) deliberately return their ISO code so the PDF keeps rendering.
++ */
++export function currencySymbol(currency: string | null | undefined): string {
++    const code = safeText(currency).toUpperCase();
++    if (!code) return CURRENCY_SYMBOLS.GBP;
++    return CURRENCY_SYMBOLS[code] ?? code;
++}
++
++/** `399.9` + `GBP` → `"£399.90"` (`"AED 399.90"` for codes without glyphs). */
++export function formatMoney(amount: unknown, currency: string): string {
++    const value = parseAmount(amount) ?? 0;
++    const symbol = currencySymbol(currency);
++    const absolute = Math.abs(value);
++
++    let formatted: string;
++    try {
++        formatted = new Intl.NumberFormat('en-GB', {
++            minimumFractionDigits: 2,
++            maximumFractionDigits: 2,
++        }).format(absolute);
++    } catch {
++        formatted = absolute.toFixed(2);
++    }
++
++    const sign = value < 0 ? '-' : '';
++    const separator = /^[A-Za-z]/.test(symbol) ? ' ' : '';
++    return `${sign}${symbol}${separator}${formatted}`;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Amount in words                                                           */
++/* ------------------------------------------------------------------------ */
++
++const ONES = [
++    'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight',
++    'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
++    'sixteen', 'seventeen', 'eighteen', 'nineteen',
++];
++
++const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
++
++const SCALES = ['', ' thousand', ' million', ' billion'];
++
++function underHundred(n: number): string {
++    if (n < 20) return ONES[n];
++    const tens = Math.floor(n / 10);
++    const rest = n % 10;
++    return rest ? `${TENS[tens]}-${ONES[rest]}` : TENS[tens];
++}
++
++function underThousand(n: number): string {
++    const hundreds = Math.floor(n / 100);
++    const rest = n % 100;
++    if (!hundreds) return underHundred(rest);
++    return rest ? `${ONES[hundreds]} hundred and ${underHundred(rest)}` : `${ONES[hundreds]} hundred`;
++}
++
++/** `1234` → `"one thousand two hundred and thirty-four"`. */
++export function numberToWords(value: number): string {
++    const n = Math.floor(Math.abs(value));
++    if (n === 0) return 'zero';
++
++    const groups: number[] = [];
++    let remaining = n;
++    while (remaining > 0) {
++        groups.push(remaining % 1000);
++        remaining = Math.floor(remaining / 1000);
++    }
++
++    let words = '';
++    for (let i = groups.length - 1; i >= 0; i--) {
++        const group = groups[i];
++        if (!group) continue;
++        const groupWords = underThousand(group) + SCALES[i];
++        if (!words) {
++            words = groupWords;
++        } else if (group < 100) {
++            // British style: "... million and five"
++            words += ` and ${groupWords}`;
++        } else {
++            words += ` ${groupWords}`;
++        }
++    }
++
++    return words;
++}
++
++interface CurrencyWordSet {
++    major: [string, string];
++    minor: [string, string];
++}
++
++const CURRENCY_WORDS: Record<string, CurrencyWordSet> = {
++    GBP: { major: ['pound', 'pounds'], minor: ['penny', 'pence'] },
++    USD: { major: ['dollar', 'dollars'], minor: ['cent', 'cents'] },
++    EUR: { major: ['euro', 'euros'], minor: ['cent', 'cents'] },
++    AED: { major: ['dirham', 'dirhams'], minor: ['fils', 'fils'] },
++    SAR: { major: ['riyal', 'riyals'], minor: ['halala', 'halalas'] },
++    QAR: { major: ['riyal', 'riyals'], minor: ['dirham', 'dirhams'] },
++    INR: { major: ['rupee', 'rupees'], minor: ['paisa', 'paise'] },
++    PKR: { major: ['rupee', 'rupees'], minor: ['paisa', 'paise'] },
++};
++
++/**
++ * `399.99` + `GBP` → `"Three hundred and ninety-nine pounds and ninety-nine
++ * pence only"`. Unsupported currencies fall back to the ISO code.
++ */
++export function amountInWords(amount: unknown, currency: string): string {
++    const value = parseAmount(amount) ?? 0;
++    const code = safeText(currency).toUpperCase() || 'GBP';
++    const words = CURRENCY_WORDS[code];
++
++    const majorUnits = Math.floor(Math.abs(value));
++    const minorUnits = Math.round((Math.abs(value) - majorUnits) * 100);
++
++    const parts: string[] = [];
++    if (majorUnits > 0 || minorUnits === 0) {
++        const majorName = words
++            ? words.major[majorUnits === 1 ? 0 : 1]
++            : code;
++        parts.push(`${numberToWords(majorUnits)} ${majorName}`);
++    }
++    if (minorUnits > 0) {
++        const minorName = words
++            ? words.minor[minorUnits === 1 ? 0 : 1]
++            : 'cents';
++        parts.push(`${numberToWords(minorUnits)} ${minorName}`);
++    }
++
++    const sentence = parts.join(' and ');
++    const signed = value < 0 ? `minus ${sentence}` : sentence;
++    return `${signed.charAt(0).toUpperCase()}${signed.slice(1)} only`;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Dates                                                                     */
++/* ------------------------------------------------------------------------ */
++
++const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
++
++export function toDate(value: unknown): Date | null {
++    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
++    if (typeof value === 'string' || typeof value === 'number') {
++        const date = new Date(value);
++        return Number.isNaN(date.getTime()) ? null : date;
++    }
++    return null;
++}
++
++/**
++ * `"30 Oct 2025"`. When a timezone is supplied (e.g. `Europe/London` from the
++ * site settings) the date is formatted in the site's timezone, otherwise the
++ * runtime timezone is used. Invalid timezones fall back gracefully.
++ */
++export function formatDate(value: unknown, timeZone?: string): string {
++    const date = toDate(value);
++    if (!date) return '';
++
++    const options: Intl.DateTimeFormatOptions = {
++        day: '2-digit',
++        month: 'short',
++        year: 'numeric',
++    };
++
++    try {
++        return new Intl.DateTimeFormat(
++            'en-GB',
++            timeZone ? { ...options, timeZone } : options
++        ).format(date);
++    } catch {
++        return new Intl.DateTimeFormat('en-GB', options).format(date);
++    }
++}
++
++/** `"30 Oct 2025, 06:00"`. */
++export function formatDateTime(value: unknown, timeZone?: string): string {
++    const date = toDate(value);
++    if (!date) return '';
++
++    const options: Intl.DateTimeFormatOptions = {
++        day: '2-digit',
++        month: 'short',
++        year: 'numeric',
++        hour: '2-digit',
++        minute: '2-digit',
++        hour12: false,
++    };
++
++    try {
++        return new Intl.DateTimeFormat(
++            'en-GB',
++            timeZone ? { ...options, timeZone } : options
++        ).format(date);
++    } catch {
++        return new Intl.DateTimeFormat('en-GB', options).format(date);
++    }
++}
++
++/** `DD/MM/YYYY` or `DD/MM/YY` (+ optional `HH:MM`) as stored in quote data. */
++export function formatCoverDate(raw: unknown, withTime = true): string {
++    const text = safeText(raw);
++    if (!text) return '';
++
++    const match = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?/.exec(text);
++    if (!match) {
++        // ISO or arbitrary string — show the date part if we can parse it.
++        return formatDateTime(text);
++    }
++
++    const [, day, month, year, hour, minute] = match;
++    const fullYear = year.length === 2 ? `20${year}` : year;
++    const monthName = MONTHS[Math.min(Math.max(Number(month) - 1, 0), 11)];
++    const datePart = `${day.padStart(2, '0')} ${monthName} ${fullYear}`;
++
++    if (withTime && hour !== undefined) {
++        return `${datePart}, ${hour.padStart(2, '0')}:${minute}`;
++    }
++    return datePart;
++}
+diff --git a/lib/invoice/model.ts b/lib/invoice/model.ts
+new file mode 100644
+index 0000000..2955493
+--- /dev/null
++++ b/lib/invoice/model.ts
+@@ -0,0 +1,362 @@
++/**
++ * Turns a quote (plus its owner and payment metadata) into the normalised
++ * `InvoiceDocument` consumed by the PDF template.
++ *
++ * Design rules baked in here:
++ * - every string is sanitised for the PDF fonts (`safeText`)
++ * - money is rounded half-up to 2 decimals and the printed arithmetic always
++ *   adds up: `subtotal - discount + tax = total`, `total - paid = balance due`
++ * - nothing about the template (colours, fonts, positions) leaks into here
++ */
++
++import {
++    amountInWords,
++    formatCoverDate,
++    formatDate,
++    formatDateTime,
++    parseAmount,
++    safeText,
++    toDate,
++} from './format';
++import type {
++    InvoiceBranding,
++    InvoiceCover,
++    InvoiceDocument,
++    InvoiceLineItem,
++    InvoiceOptions,
++    InvoiceParty,
++    InvoiceTotals,
++} from './types';
++
++function round2(value: number): number {
++    return Math.round((value + Number.EPSILON) * 100) / 100;
++}
++
++function titleCase(value: string): string {
++    return value
++        .toLowerCase()
++        .split(/[\s_-]+/)
++        .filter(Boolean)
++        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
++        .join(' ');
++}
++
++/** `stripe` → `Card payment (Stripe)`, `bank_transfer` → `Bank transfer`. */
++export function paymentMethodLabel(method: unknown): string {
++    const raw = safeText(method).toLowerCase();
++    if (!raw) return '';
++
++    const map: Record<string, string> = {
++        stripe: 'Card payment (Stripe)',
++        square: 'Card payment (Square)',
++        authorize: 'Card payment (Authorize.Net)',
++        'authorize.net': 'Card payment (Authorize.Net)',
++        authorizenet: 'Card payment (Authorize.Net)',
++        airwallex: 'Card payment (Airwallex)',
++        paddle: 'Card payment (Paddle)',
++        paypal: 'PayPal',
++        bank: 'Bank transfer',
++        bank_transfer: 'Bank transfer',
++        cash: 'Cash',
++        apple_pay: 'Apple Pay',
++        google_pay: 'Google Pay',
++    };
++
++    return map[raw] ?? titleCase(raw);
++}
++
++function buildBuyer(quoteData: any, user: any, policyNumber: string): InvoiceParty {
++    const customer = quoteData?.customerData || {};
++
++    const nameParts = [
++        quoteData?.nameTitle,
++        customer.firstName || user?.firstName,
++        customer.middleName,
++        customer.lastName || user?.lastName,
++    ]
++        .map((part) => safeText(part))
++        .filter(Boolean);
++
++    const addressLines = [safeText(customer.address || user?.address)]
++        .filter(Boolean)
++        .concat(
++            [
++                safeText(customer.post_code || customer.postcode || user?.postCode),
++                safeText(customer.country || user?.country),
++            ].filter(Boolean)
++        );
++
++    return {
++        displayName: nameParts.join(' ') || 'Customer',
++        email: safeText(user?.email || customer.email),
++        phone: safeText(customer.phoneNumber || user?.phone),
++        addressLines,
++        reference: safeText(user?.userId || user?.customerId || policyNumber),
++    };
++}
++
++function buildCover(quoteData: any, buyer: InvoiceParty): InvoiceCover {
++    const customer = quoteData?.customerData || {};
++    const vehicle = customer.vehicle || {};
++
++    const makeModel = [safeText(vehicle.make), safeText(vehicle.model)].filter(Boolean).join(' ');
++    const engine = safeText(vehicle.engineCC);
++
++    const registration = safeText(
++        customer.registration || customer.regNumber || quoteData?.regNumber
++    ).toUpperCase();
++
++    const duration = safeText(customer.duration || quoteData?.breakdown?.duration);
++
++    const modifications = Array.isArray(quoteData?.vehicleModifications)
++        ? quoteData.vehicleModifications.map((item: unknown) => safeText(item)).filter(Boolean)
++        : safeText(quoteData?.vehicleModifications)
++            ? [safeText(quoteData.vehicleModifications)]
++            : [];
++
++    const licenceType = safeText(customer.licenseType);
++    const licenceHeld = safeText(customer.licenseHeld);
++
++    return {
++        policyNumber: '',
++        insuranceType: 'Temporary Motor Insurance',
++        vehicle: makeModel || 'N/A',
++        registration,
++        vehicleDetail: [safeText(vehicle.year), engine ? (/(cc|litre|liter)/i.test(engine) ? engine : `${engine} cc`) : '']
++            .filter(Boolean)
++            .join(' · '),
++        periodStart: formatCoverDate(quoteData?.startTime || quoteData?.startDate),
++        periodEnd: formatCoverDate(quoteData?.expiryTime || quoteData?.endDate),
++        duration: duration ? `${duration} cover` : '',
++        reason: safeText(customer.reason || quoteData?.breakdown?.reason || quoteData?.coverReason),
++        driver: buyer.displayName,
++        licence: [licenceType, licenceHeld ? `held ${licenceHeld.toLowerCase()}` : '']
++            .filter(Boolean)
++            .join(' · '),
++        modifications: modifications.length ? modifications.join(', ') : 'None declared',
++    };
++}
++
++interface TotalsInput {
++    listAmount: number | null;
++    payable: number;
++    discountLabel: string;
++}
++
++function buildTotals(input: TotalsInput, branding: InvoiceBranding): InvoiceTotals {
++    const rate = Math.max(0, branding.taxRate);
++    const payable = round2(input.payable);
++    const list = round2(Math.max(input.listAmount ?? payable, payable));
++
++    // Work backwards from the amount actually charged so the invoice always
++    // balances, no matter how the quote's list price was stored.
++    const divisor = rate > 0 && !branding.taxInclusive ? 1 + rate / 100 : 1;
++    const netList = round2(list / divisor);
++    const netPayable = round2(payable / divisor);
++
++    const subtotal = netList;
++    const discount = round2(Math.max(netList - netPayable, 0));
++    const taxAmount = round2(branding.taxInclusive && rate > 0 ? netPayable - netPayable / (1 + rate / 100) : netPayable * (rate / 100));
++
++    const total = round2(branding.taxInclusive && rate > 0 ? netPayable : netPayable + taxAmount);
++
++    return {
++        subtotal,
++        discount,
++        discountLabel: input.discountLabel,
++        taxAmount,
++        taxRate: rate,
++        taxLabel: branding.taxLabel,
++        taxInclusive: branding.taxInclusive,
++        total,
++        amountPaid: 0,
++        balanceDue: total,
++    };
++}
++
++function buildItems(
++    quoteData: any,
++    cover: InvoiceCover,
++    totals: InvoiceTotals,
++    branding: InvoiceBranding,
++    policyNumber: string
++): InvoiceLineItem[] {
++    const items: InvoiceLineItem[] = [];
++
++    const period = [cover.periodStart, cover.periodEnd].filter(Boolean).join('  -  ');
++
++    items.push({
++        description: cover.insuranceType,
++        details: [
++            `Policy number ${policyNumber}`,
++            cover.registration ? `Vehicle ${cover.vehicle} (${cover.registration})` : `Vehicle ${cover.vehicle}`,
++            period ? `Cover period ${period}` : '',
++            cover.reason ? `Cover reason ${cover.reason}` : '',
++        ].filter(Boolean),
++        quantity: 1,
++        unitPrice: totals.subtotal,
++        amount: totals.subtotal,
++        kind: 'charge',
++    });
++
++    if (totals.discount > 0) {
++        items.push({
++            description: totals.discountLabel,
++            details: [],
++            quantity: 1,
++            unitPrice: -totals.discount,
++            amount: -totals.discount,
++            kind: 'discount',
++        });
++    }
++
++    if (totals.taxAmount > 0 && !branding.taxInclusive) {
++        items.push({
++            description: `${totals.taxLabel}${totals.taxRate > 0 ? ` @ ${totals.taxRate}%` : ''}`,
++            details: [],
++            quantity: 1,
++            unitPrice: totals.taxAmount,
++            amount: totals.taxAmount,
++            kind: 'tax',
++        });
++    }
++
++    return items;
++}
++
++function buildNotes(documentTitle: string, cover: InvoiceCover): InvoiceDocument['notes'] {
++    return {
++        accessSteps: [
++            {
++                title: 'Account dashboard',
++                body: 'Sign in to your account and open the dashboard. All of your purchased documents are listed there and can be downloaded again at any time.',
++            },
++            {
++                title: 'Confirmation email',
++                body: 'Open the confirmation email sent to your registered address and use the "View documents" button for instant access to this policy.',
++            },
++        ],
++        included: [
++            'Policy schedule and certificate of insurance (PDF)',
++            'Statement of facts and product information',
++            'This invoice, filed under your account for your records',
++            'Unlimited re-downloads for the lifetime of your policy',
++        ],
++        important: [
++            'This is a digital service. No physical documents are posted to you.',
++            'Documents are issued electronically and are available immediately after the payment has been confirmed.',
++            `Cover is only valid for the period printed on the certificate: ${cover.periodStart}${cover.periodEnd ? ` to ${cover.periodEnd}` : ''}.`,
++            'Refunds: a full refund is available within 7 days of purchase when a technical issue prevents you from accessing or using your documents as intended.',
++            'If anything on this invoice looks incorrect, contact our support team and we will issue a corrected document.',
++        ],
++        thankYou: `Thank you for choosing us for your ${documentTitle.toLowerCase().includes('tax') ? '' : ''}temporary motor insurance.`,
++    };
++}
++
++export interface BuildInvoiceInput {
++    quoteData: any;
++    user: any;
++    policyNumber: string;
++    branding: InvoiceBranding;
++    options?: InvoiceOptions;
++}
++
++/**
++ * Build the presentation-ready invoice document. Pure function: no database,
++ * no clock reads beyond `options.issuedAt` / `now` defaults for the timestamp.
++ */
++export function buildInvoiceDocument({
++    quoteData,
++    user,
++    policyNumber,
++    branding,
++    options = {},
++}: BuildInvoiceInput): InvoiceDocument {
++    const payment = options.payment || {};
++    const currency = (options.currency || branding.currency || 'GBP').toUpperCase();
++
++    const buyer = buildBuyer(quoteData, user, policyNumber);
++    const cover = buildCover(quoteData, buyer);
++    cover.policyNumber = policyNumber;
++
++    const payable =
++        parseAmount(payment.amount) ??
++        parseAmount(quoteData?.total) ??
++        parseAmount(quoteData?.updatePrice) ??
++        parseAmount(quoteData?.cpw) ??
++        0;
++
++    const listAmount =
++        parseAmount(payment.listAmount) ??
++        parseAmount(quoteData?.cpw) ??
++        parseAmount(quoteData?.originalTotal);
++
++    const promoCode = safeText(payment.promoCode || quoteData?.promoCode);
++    const discountLabel = promoCode
++        ? `Promotional discount (${promoCode})`
++        : 'Discount applied';
++
++    const totals = buildTotals({ listAmount, payable, discountLabel }, branding);
++
++    const paid = payment.paid === true;
++    const balanceDue = paid ? 0 : totals.total;
++    totals.amountPaid = paid ? totals.total : 0;
++    totals.balanceDue = balanceDue;
++
++    const issuedAt =
++        payment.date ??
++        quoteData?.paymentDate ??
++        options.issuedAt ??
++        new Date();
++
++    const issuedDate = toDate(issuedAt) || new Date();
++    const dueDate = branding.dueDays > 0
++        ? new Date(issuedDate.getTime() + branding.dueDays * 24 * 60 * 60 * 1000)
++        : null;
++
++    const items = buildItems(quoteData, cover, totals, branding, policyNumber);
++
++    const statusLabel = paid
++        ? balanceDue > 0
++            ? 'PART PAID'
++            : 'PAID IN FULL'
++        : safeText(payment.status).toUpperCase() === 'PENDING'
++            ? 'AWAITING PAYMENT'
++            : 'PAYMENT DUE';
++
++    return {
++        documentTitle: branding.documentTitle || 'INVOICE',
++        invoiceNumber: policyNumber,
++        watermark: paid ? 'PAID' : 'DUE',
++        issueDateText: formatDate(issuedDate, branding.timezone),
++        issueTimeText: formatDateTime(issuedDate, branding.timezone).split(', ')[1] || '',
++        dueDateText: dueDate ? formatDate(dueDate, branding.timezone) : '',
++        generatedText: formatDateTime(new Date(), branding.timezone),
++        currency,
++        seller: {
++            name: branding.companyName || branding.siteName,
++            addressLines: branding.companyAddressLines,
++            registration: branding.companyRegistration,
++            vatNumber: branding.vatNumber,
++            email: branding.supportEmail,
++            phone: branding.companyPhone,
++            website: branding.siteUrl.replace(/^https?:\/\//i, ''),
++        },
++        buyer,
++        cover,
++        items,
++        totals,
++        payment: {
++            paid,
++            methodLabel: paymentMethodLabel(payment.method) || 'Card payment',
++            reference: safeText(payment.reference),
++            dateText: paid ? formatDateTime(issuedDate, branding.timezone) : '',
++            statusLabel,
++        },
++        amountInWords: amountInWords(totals.total, currency),
++        taxNote: branding.taxNote,
++        terms: branding.terms,
++        footerNote: branding.footerNote,
++        notes: buildNotes(cover.insuranceType, cover),
++    };
++}
+diff --git a/lib/invoice/primitives.ts b/lib/invoice/primitives.ts
+new file mode 100644
+index 0000000..fdc8c32
+--- /dev/null
++++ b/lib/invoice/primitives.ts
+@@ -0,0 +1,501 @@
++/**
++ * Low-level PDF drawing primitives that give the invoice its "designed"
++ * feel — rounded cards, gradient bands, ticket perforations, seals and
++ * vector glyphs — all built on pdf-lib's `drawSvgPath` / `drawRectangle`.
++ *
++ * Geometry convention: everything public in this module takes *top based*
++ * coordinates (`top` measured downwards from the top of the page), because
++ * that is how the template code reads top-to-bottom like a web page.
++ */
++
++import type { PDFFont, PDFPage } from 'pdf-lib';
++import type { InvoicePalette } from './theme';
++
++type PdfColor = ReturnType<typeof import('pdf-lib')['rgb']>;
++
++export const PT_PER_MM = 2.83465;
++
++export function mm(value: number): number {
++    return value * PT_PER_MM;
++}
++
++/** Convert a top-based coordinate into pdf-lib's bottom-based y axis. */
++export function fromTop(page: PDFPage, top: number): number {
++    return page.getSize().height - top;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Paths                                                                     */
++/* ------------------------------------------------------------------------ */
++
++/** Rounded rectangle as an SVG path (pdf-lib converts it to PDF operators). */
++export function roundedRectPath(width: number, height: number, radius: number): string {
++    const r = Math.max(0, Math.min(radius, width / 2, height / 2));
++    return [
++        `M 0 ${r}`,
++        `A ${r} ${r} 0 0 1 ${r} 0`,
++        `L ${width - r} 0`,
++        `A ${r} ${r} 0 0 1 ${width} ${r}`,
++        `L ${width} ${height - r}`,
++        `A ${r} ${r} 0 0 1 ${width - r} ${height}`,
++        `L ${r} ${height}`,
++        `A ${r} ${r} 0 0 1 0 ${height - r}`,
++        'Z',
++    ].join(' ');
++}
++
++/** Circle as an SVG path, used for ring-style seals. */
++export function circlePath(radius: number): string {
++    const k = 0.5522847498;
++    const r = radius;
++    return [
++        `M ${-r} 0`,
++        `C ${-r} ${-k * r} ${-k * r} ${-r} 0 ${-r}`,
++        `C ${k * r} ${-r} ${r} ${-k * r} ${r} 0`,
++        `C ${r} ${k * r} ${k * r} ${r} 0 ${r}`,
++        `C ${-k * r} ${r} ${-r} ${k * r} ${-r} 0`,
++        'Z',
++    ].join(' ');
++}
++
++/** A single scallop used for the ticket-style perforation edge. */
++export function scallopPath(radius: number): string {
++    return `M ${-radius} 0 A ${radius} ${radius} 0 0 0 ${radius} 0 Z`;
++}
++
++/**
++ * Decorative wave band.
++ *
++ * Note on coordinates: pdf-lib draws SVG paths with the y axis flipped, so the
++ * shape produced by `wavePath()` occupies `[origin.y - height, origin.y]`.
++ * Always position waves through `drawWave()` (below) rather than calling
++ * `page.drawSvgPath()` directly, which is easy to get wrong.
++ */
++export function wavePath(width: number, height: number, waves: number, phase = 0): string {
++    const step = width / 60;
++    const points: Array<[number, number]> = [];
++
++    for (let x = 0; x <= width + 0.001; x += step) {
++        const t = (x / width) * Math.PI * 2 * waves + phase;
++        const y = height * (0.5 + 0.5 * Math.sin(t));
++        points.push([x, y]);
++    }
++
++    const line = points
++        .map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${(height - y).toFixed(2)}`)
++        .join(' ');
++
++    return `${line} L ${width} ${height} L 0 ${height} Z`;
++}
++
++/** Check mark glyph (scaled to a `size` box, origin at its centre-left). */
++export function checkPath(size: number): string {
++    const s = size;
++    return `M ${0.06 * s} ${0.52 * s} L ${0.4 * s} ${0.86 * s} L ${0.98 * s} ${0.1 * s}`;
++}
++
++/** Small "sparkle"/star used as a brand flourish. */
++export function sparklePath(size: number): string {
++    const s = size;
++    return [
++        `M ${s * 0.5} 0`,
++        `Q ${s * 0.58} ${s * 0.42} ${s} ${s * 0.5}`,
++        `Q ${s * 0.58} ${s * 0.58} ${s * 0.5} ${s}`,
++        `Q ${s * 0.42} ${s * 0.58} 0 ${s * 0.5}`,
++        `Q ${s * 0.42} ${s * 0.42} ${s * 0.5} 0`,
++        'Z',
++    ].join(' ');
++}
++
++/* ------------------------------------------------------------------------ */
++/* Fills & bands                                                             */
++/* ------------------------------------------------------------------------ */
++
++export interface TopRectOptions {
++    x: number;
++    top: number;
++    width: number;
++    height: number;
++    color?: PdfColor;
++    opacity?: number;
++}
++
++export function fillRectTop(page: PDFPage, options: TopRectOptions): void {
++    const { x, top, width, height, color, opacity } = options;
++    page.drawRectangle({
++        x,
++        y: fromTop(page, top + height),
++        width,
++        height,
++        color,
++        opacity,
++    });
++}
++
++export interface TopCardOptions extends TopRectOptions {
++    radius?: number;
++    borderColor?: PdfColor;
++    borderWidth?: number;
++}
++
++/**
++ * Rounded card. `top` is the top edge; the shape grows downwards.
++ *
++ * pdf-lib runs `fillAndStroke()` whenever `borderWidth` is set — even without
++ * a `borderColor` — and strokes with whatever colour is currently active
++ * (black), which silently drew outlines on every borderless card. The border
++ * width is therefore only passed when a border colour is given.
++ */
++export function drawCard(page: PDFPage, options: TopCardOptions): void {
++    const { x, top, width, height, color, radius = 12, borderColor, borderWidth = 0.8, opacity } = options;
++
++    page.drawSvgPath(roundedRectPath(width, height, radius), {
++        x,
++        y: fromTop(page, top),
++        color,
++        borderColor,
++        borderWidth: borderColor ? borderWidth : undefined,
++        opacity,
++        borderOpacity: opacity,
++    });
++}
++
++/**
++ * Vertical (or horizontal) gradient fill, approximated with thin slices —
++ * the standard trick for gradients across every PDF viewer.
++ */
++export function drawGradientBand(
++    page: PDFPage,
++    options: {
++        x: number;
++        top: number;
++        width: number;
++        height: number;
++        from: PdfColor;
++        to: PdfColor;
++        direction?: 'vertical' | 'horizontal';
++        slices?: number;
++        opacity?: number;
++    }
++): void {
++    const {
++        x,
++        top,
++        width,
++        height,
++        from,
++        to,
++        direction = 'horizontal',
++        slices = 160,
++        opacity,
++    } = options;
++
++    const count = Math.max(2, Math.min(slices, Math.ceil((direction === 'horizontal' ? width : height) / 1)));
++    const step = (direction === 'horizontal' ? width : height) / count;
++
++    for (let i = 0; i < count; i++) {
++        const t = i / (count - 1);
++        const color = mixColor(from, to, t);
++        const offset = i * step;
++
++        if (direction === 'horizontal') {
++            fillRectTop(page, { x: x + offset, top, width: step + 0.6, height, color, opacity });
++        } else {
++            fillRectTop(page, { x, top: top + offset, width, height: step + 0.6, color, opacity });
++        }
++    }
++}
++
++/** Linear interpolation between two `rgb()` colours. */
++export function mixColor(from: PdfColor, to: PdfColor, t: number): PdfColor {
++    const a = from as unknown as { red: number; green: number; blue: number };
++    const b = to as unknown as { red: number; green: number; blue: number };
++    const clamp = (v: number) => Math.max(0, Math.min(1, v));
++    return {
++        type: 'RGB' as const,
++        red: clamp(a.red + (b.red - a.red) * t),
++        green: clamp(a.green + (b.green - a.green) * t),
++        blue: clamp(a.blue + (b.blue - a.blue) * t),
++    } as unknown as PdfColor;
++}
++
++/** Hairline rule drawn from a top-based y coordinate. */
++export function hairline(
++    page: PDFPage,
++    options: {
++        x: number;
++        top: number;
++        width: number;
++        color: PdfColor;
++        thickness?: number;
++        dashArray?: number[];
++    }
++): void {
++    const { x, top, width, color, thickness = 0.7, dashArray } = options;
++    const y = fromTop(page, top);
++    page.drawLine({
++        start: { x, y },
++        end: { x: x + width, y },
++        thickness,
++        color,
++        dashArray,
++        dashPhase: dashArray ? 2 : undefined,
++    });
++}
++
++/**
++ * Ticket perforation: a row of small semicircles punched out of a coloured
++ * band's top edge. Painted in the page background colour on top of the band.
++ */
++export function drawPerforation(
++    page: PDFPage,
++    options: {
++        x: number;
++        top: number;
++        width: number;
++        radius?: number;
++        color: PdfColor;
++        /** `down` punches bumps downwards (band above), `up` bumps upwards. */
++        direction?: 'down' | 'up';
++        inset?: number;
++    }
++): void {
++    const { x, top, width, radius = 4.2, color, direction = 'down', inset = 18 } = options;
++    const usable = width - inset * 2;
++    const count = Math.max(6, Math.floor(usable / (radius * 3.4)));
++    const step = usable / (count - 1);
++
++    for (let i = 0; i < count; i++) {
++        page.drawSvgPath(scallopPath(radius), {
++            x: x + inset + i * step,
++            y: fromTop(page, top),
++            color,
++            rotate: direction === 'down' ? undefined : undefined,
++        });
++    }
++}
++
++/**
++ * Fill a wave across a zone: `top` is the zone's top edge and the wave fills
++ * `height` downwards from it.
++ */
++export function drawWave(
++    page: PDFPage,
++    options: {
++        x: number;
++        top: number;
++        width: number;
++        height: number;
++        color: PdfColor;
++        opacity?: number;
++        waves?: number;
++        phase?: number;
++    }
++): void {
++    const { x, top, width, height, color, opacity, waves = 2.4, phase = 0 } = options;
++
++    page.drawSvgPath(wavePath(width, height, waves, phase), {
++        // `drawSvgPath` grows downwards from this origin, so the origin is the
++        // *top* of the wave zone once measured in top-based coordinates.
++        y: fromTop(page, top),
++        x,
++        color,
++        opacity,
++    });
++}
++
++/** Circular wax-seal style stamp (ring + glyph text + label). */
++export function drawSeal(
++    page: PDFPage,
++    options: {
++        cx: number;
++        top: number;
++        radius: number;
++        fillColor: PdfColor;
++        ringColor: PdfColor;
++        innerFillColor?: PdfColor;
++        label: string;
++        labelFont: PDFFont;
++        labelSize: number;
++        labelColor: PdfColor;
++        subLabel?: string;
++        subLabelFont?: PDFFont;
++        subLabelSize?: number;
++        subLabelColor?: PdfColor;
++        rotate?: number;
++        ringWidth?: number;
++        dashedRing?: boolean;
++        fillOpacity?: number;
++        ringOpacity?: number;
++        labelOpacity?: number;
++    }
++): void {
++    const {
++        cx,
++        top,
++        radius,
++        fillColor,
++        ringColor,
++        innerFillColor,
++        label,
++        labelFont,
++        labelSize,
++        labelColor,
++        subLabel,
++        subLabelFont,
++        subLabelSize = 5.6,
++        subLabelColor,
++        rotate = -14,
++        ringWidth = 1.2,
++        dashedRing = false,
++        fillOpacity,
++        ringOpacity,
++        labelOpacity,
++    } = options;
++
++    const cy = fromTop(page, top);
++    const centreY = cy - radius;
++
++    page.drawSvgPath(circlePath(radius), { x: cx, y: centreY, color: fillColor, opacity: fillOpacity });
++
++    if (innerFillColor) {
++        page.drawSvgPath(circlePath(radius - ringWidth * 2.4), {
++            x: cx,
++            y: centreY,
++            color: innerFillColor,
++            opacity: fillOpacity,
++        });
++    }
++
++    page.drawSvgPath(circlePath(radius - ringWidth / 2), {
++        x: cx,
++        y: centreY,
++        borderColor: ringColor,
++        borderWidth: ringWidth,
++        borderOpacity: ringOpacity,
++        borderDashArray: dashedRing ? [2.4, 2.4] : undefined,
++    });
++
++    const labelWidth = labelFont.widthOfTextAtSize(label, labelSize);
++    page.drawText(label, {
++        x: cx - labelWidth / 2,
++        y: centreY - labelSize * (subLabel ? 0.5 : 0.355),
++        font: labelFont,
++        size: labelSize,
++        color: labelColor,
++        opacity: labelOpacity,
++    });
++
++    if (subLabel && subLabelFont) {
++        const subWidth = subLabelFont.widthOfTextAtSize(subLabel, subLabelSize);
++        page.drawText(subLabel, {
++            x: cx - subWidth / 2,
++            y: centreY - radius * 0.34,
++            font: subLabelFont,
++            size: subLabelSize,
++            color: subLabelColor || labelColor,
++            opacity: labelOpacity,
++        });
++    }
++
++}
++
++/* ------------------------------------------------------------------------ */
++/* Text helpers                                                              */
++/* ------------------------------------------------------------------------ */
++
++export interface TextOptions {
++    x: number;
++    /** Baseline position measured from the top of the page. */
++    top: number;
++    text: string;
++    font: PDFFont;
++    size: number;
++    color: PdfColor;
++    opacity?: number;
++}
++
++export function drawText(page: PDFPage, options: TextOptions): void {
++    const { x, top, text, font, size, color, opacity } = options;
++    if (!text) return;
++    page.drawText(text, { x, y: fromTop(page, top), font, size, color, opacity });
++}
++
++export function drawTextRight(page: PDFPage, options: TextOptions): void {
++    const width = options.font.widthOfTextAtSize(options.text, options.size);
++    drawText(page, { ...options, x: options.x - width });
++}
++
++export function drawTextCenter(page: PDFPage, options: TextOptions & { width: number }): void {
++    const width = options.font.widthOfTextAtSize(options.text, options.size);
++    drawText(page, { ...options, x: options.x + (options.width - width) / 2 });
++}
++
++/**
++ * Uppercase "tracked" label: the typographic trick that makes documents look
++ * considered. pdf-lib has no letter-spacing, so the spacing is faked by
++ * drawing each character at a manually advanced x position.
++ */
++export function drawTracked(
++    page: PDFPage,
++    options: TextOptions & { tracking?: number }
++): number {
++    const { x, top, text, font, size, color, tracking = 0.9, opacity } = options;
++    let cursor = x;
++
++    for (const ch of text) {
++        page.drawText(ch, {
++            x: cursor,
++            y: fromTop(page, top),
++            font,
++            size,
++            color,
++            opacity,
++        });
++        cursor += font.widthOfTextAtSize(ch, size) + tracking;
++    }
++
++    return cursor - x - tracking;
++}
++
++/** Width of a tracked label (mirrors `drawTracked`). */
++export function trackedWidth(text: string, font: PDFFont, size: number, tracking = 0.9): number {
++    let width = 0;
++    for (const ch of text) width += font.widthOfTextAtSize(ch, size) + tracking;
++    return Math.max(0, width - tracking);
++}
++
++/** Bullet glyph used in lists: a filled dot. */
++export function drawBullet(
++    page: PDFPage,
++    options: { x: number; top: number; radius?: number; color: PdfColor; opacity?: number }
++): void {
++    const { x, top, radius = 1.7, color, opacity } = options;
++    page.drawSvgPath(circlePath(radius), { x, y: fromTop(page, top), color, opacity });
++}
++
++/** Vector check mark used in "what's included" lists. */
++export function drawCheck(
++    page: PDFPage,
++    options: { x: number; top: number; size?: number; color: PdfColor; thickness?: number }
++): void {
++    const { x, top, size = 8, color, thickness = 1.4 } = options;
++    page.drawSvgPath(checkPath(size), {
++        x,
++        y: fromTop(page, top),
++        borderColor: color,
++        borderWidth: thickness,
++        borderLineCap: undefined,
++    });
++}
++
++/** Vector sparkle used as a brand flourish next to uppercase labels. */
++export function drawSparkle(
++    page: PDFPage,
++    options: { x: number; top: number; size?: number; color: PdfColor; opacity?: number }
++): void {
++    const { x, top, size = 7, color, opacity } = options;
++    page.drawSvgPath(sparklePath(size), { x, y: fromTop(page, top), color, opacity });
++}
++
++export type { InvoicePalette };
+diff --git a/lib/invoice/render.ts b/lib/invoice/render.ts
+new file mode 100644
+index 0000000..c5f592d
+--- /dev/null
++++ b/lib/invoice/render.ts
+@@ -0,0 +1,1923 @@
++/**
++ * The invoice template itself.
++ *
++ * Visual language (v2 — "luxury statement"):
++ * - full-bleed masthead with a horizontal brand gradient, a soft aurora wave
++ *   and a ticket-perforated bottom edge
++ * - a white "logo plate" so any customer logo stays readable on colour
++ * - a policy/vehicle summary card
++ * - a dark hero card carrying the amount payable, with a wax-seal style stamp
++ *   that flips from PAID to DUE
++ * - a clean, hairline-separated items table with right-aligned money columns
++ * - a balanced totals block and a legal footer
++ * - a second page: recap, payment summary, delivery steps, inclusions,
++ *   important information and a help card
++ *
++ * Everything is drawn with vector primitives (no HTML, no headless browser),
++ * so the PDF stays small, sharp at any zoom, and runs on every runtime.
++ *
++ * Layout note: page 1 content is bounded by `metrics.footerHeight` — blocks
++ * that would collide with the footer (`drawClosingNote`) are skipped rather
++ * than allowed to overlap.
++ */
++
++import {
++    PDFDocument,
++    PDFFont,
++    PDFPage,
++    StandardFonts,
++} from 'pdf-lib';
++import { loadInvoiceLogo, type InvoiceLogo } from './assets';
++import { formatMoney, safeText, truncate, wrapText } from './format';
++import {
++    checkPath,
++    circlePath,
++    drawBullet,
++    drawCard,
++    drawGradientBand,
++    drawPerforation,
++    drawSeal,
++    drawSparkle,
++    drawWave,
++    drawText,
++    drawTextCenter,
++    drawTextRight,
++    drawTracked,
++    fromTop,
++    hairline,
++    trackedWidth,
++
++} from './primitives';
++import { createInvoiceTheme, type InvoiceTheme } from './theme';
++import type { InvoiceBranding, InvoiceDocument, InvoiceLineItem } from './types';
++
++/* ------------------------------------------------------------------------ */
++/* Shared types                                                              */
++/* ------------------------------------------------------------------------ */
++
++interface Fonts {
++    regular: PDFFont;
++    bold: PDFFont;
++    oblique: PDFFont;
++}
++
++interface Ctx {
++    doc: InvoiceDocument;
++    theme: InvoiceTheme;
++    fonts: Fonts;
++    logo: InvoiceLogo | null;
++    /** Total number of pages, for "Page 1 of 2". */
++    totalPages: number;
++}
++
++interface ColumnGeometry {
++    pageWidth: number;
++    margin: number;
++    contentWidth: number;
++    descX: number;
++    descWidth: number;
++    qtyCenter: number;
++    unitRight: number;
++    amountRight: number;
++}
++
++const LINE_HEIGHT = {
++    body: 13.2,
++    small: 11.8,
++    micro: 11.2,
++};
++
++const DETAIL_LINES_MAX = 5;
++
++/** Baseline position for text whose block starts at `top`. */
++function baseline(top: number, size: number): number {
++    return top + size * 0.74;
++}
++
++function columnsFor(page: PDFPage, theme: InvoiceTheme): ColumnGeometry {
++    const pageWidth = page.getSize().width;
++    const margin = theme.metrics.pageMargin;
++    const amountRight = pageWidth - margin;
++    const amountWidth = 92;
++    const unitRight = amountRight - amountWidth;
++    const unitWidth = 86;
++    const qtyRight = unitRight - unitWidth;
++    const qtyWidth = 42;
++
++    return {
++        pageWidth,
++        margin,
++        contentWidth: pageWidth - margin * 2,
++        descX: margin,
++        descWidth: qtyRight - qtyWidth - margin - 16,
++        qtyCenter: qtyRight - qtyWidth / 2,
++        unitRight,
++        amountRight,
++    };
++}
++
++/* ------------------------------------------------------------------------ */
++/* Entry point                                                               */
++/* ------------------------------------------------------------------------ */
++
++export interface RenderInvoiceOptions {
++    document: InvoiceDocument;
++    branding: InvoiceBranding;
++    logo?: InvoiceLogo | null;
++    /** Set to `false` to render the single-page invoice only. */
++    includeInformationPage?: boolean;
++}
++
++/**
++ * Render the invoice into `pdf`: two A4 pages (invoice + information page).
++ */
++export async function renderInvoicePdf(
++    pdf: PDFDocument,
++    options: RenderInvoiceOptions
++): Promise<void> {
++    const { document: doc, branding } = options;
++    const theme = createInvoiceTheme(branding);
++
++    const fonts: Fonts = {
++        regular: await pdf.embedFont(StandardFonts.Helvetica),
++        bold: await pdf.embedFont(StandardFonts.HelveticaBold),
++        oblique: await pdf.embedFont(StandardFonts.HelveticaOblique),
++    };
++
++    const logo =
++        options.logo !== undefined ? options.logo : await loadInvoiceLogo(pdf, branding.logoUrl);
++
++    const includeInfoPage = options.includeInformationPage !== false;
++
++    const ctx: Ctx = {
++        doc,
++        theme,
++        fonts,
++        logo: logo ?? null,
++        totalPages: 1,
++    };
++
++    // --- invoice page 1: the fixed "cover" part --------------------------
++    const firstPage = pdf.addPage();
++    drawMasthead(ctx, firstPage);
++
++    const afterParties = drawParties(ctx, firstPage, theme.metrics.headerHeight + 14);
++    const afterCover = drawCoverPanel(ctx, firstPage, afterParties + 14);
++    const afterHero = drawAmountCard(ctx, firstPage, afterCover + 16);
++
++    // --- flowing part: charges → totals → closing note -------------------
++    // The table continues onto new pages when it runs out of room, and the
++    // totals block is never orphaned at the bottom of a page.
++    const invoicePages: PDFPage[] = [firstPage];
++    const flow: Flow = {
++        ctx,
++        pdf,
++        pages: invoicePages,
++        page: firstPage,
++        cursor: afterHero + 12,
++        summaryTitle: `${safeText(doc.documentTitle).toUpperCase()} ${safeText(doc.invoiceNumber)}`,
++    };
++
++    drawChargesTable(flow);
++    drawTotalsSection(flow);
++
++    // --- information page -----------------------------------------------
++    const pages: Array<{ page: PDFPage; kind: 'invoice' | 'info' }> = invoicePages.map((page) => ({
++        page,
++        kind: 'invoice' as const,
++    }));
++
++    if (includeInfoPage) {
++        const infoPage = pdf.addPage();
++        drawCompactMasthead(ctx, infoPage, 'Your documents & cover information');
++        const top = drawRecapCard(ctx, infoPage, theme.metrics.compactHeaderHeight + 26);
++        const afterPayment = drawPaymentSummary(ctx, infoPage, top + 26);
++        const afterSteps = drawAccessSteps(ctx, infoPage, afterPayment + 26);
++        const afterSections = drawSectionsGrid(ctx, infoPage, afterSteps + 24);
++        drawHelpCard(ctx, infoPage, afterSections + 24);
++        pages.push({ page: infoPage, kind: 'info' });
++    }
++
++    ctx.totalPages = pages.length;
++    pages.forEach((entry, index) => drawPageFooter(ctx, entry.page, index + 1));
++}
++
++/* ------------------------------------------------------------------------ */
++/* Mastheads                                                                 */
++/* ------------------------------------------------------------------------ */
++
++function drawAuroraWave(
++    page: PDFPage,
++    theme: InvoiceTheme,
++    /** Top of the wave zone; the waves fill downwards from here. */
++    top: number,
++    height: number,
++    width: number
++) {
++    const { color } = theme;
++
++    drawWave(page, {
++        x: 0,
++        top: top + height * 0.45,
++        width,
++        height: height * 0.55,
++        color: color.onPrimary,
++        opacity: 0.08,
++        waves: 2.2,
++        phase: 0.4,
++    });
++
++    drawWave(page, {
++        x: 0,
++        top,
++        width,
++        height,
++        color: color.primaryTint,
++        opacity: 0.22,
++        waves: 2.6,
++        phase: 2.1,
++    });
++}
++
++function drawLogoPlate(
++    ctx: Ctx,
++    page: PDFPage,
++    options: { x: number; top: number; height: number; minWidth: number; padding: number }
++): void {
++    const { theme, fonts, logo, doc } = ctx;
++    const { color } = theme;
++    const { x, top, height, minWidth, padding } = options;
++
++    const wordmark = safeText(doc.seller.name || theme.palette.primary).toUpperCase();
++    const maxWordmarkSize = height >= 44 ? 14.5 : 11.5;
++    // Shrink the wordmark until it fits the plate — long legal entity names
++    // must never spill outside the white plate.
++    let wordmarkSize = maxWordmarkSize;
++    let wordmarkWidth = fonts.bold.widthOfTextAtSize(wordmark, wordmarkSize);
++    const maxWordmarkWidth = Math.max(minWidth, 250) - 32;
++
++    while (wordmarkWidth > maxWordmarkWidth && wordmarkSize > 7) {
++        wordmarkSize -= 0.25;
++        wordmarkWidth = fonts.bold.widthOfTextAtSize(wordmark, wordmarkSize);
++    }
++
++    // The plate is sized around its content so the header never looks padded.
++    const contentWidth = logo
++        ? height * 1.9 * Math.min(Math.max(logo.aspect, 0.9), 4)
++        : wordmarkWidth;
++    const plateWidth = Math.max(minWidth, Math.min(contentWidth + padding * 2, 250));
++    const plateHeight = height;
++
++    drawCard(page, {
++        x,
++        top,
++        width: plateWidth,
++        height: plateHeight,
++        radius: theme.metrics.radiusSmall,
++        color: color.onPrimary,
++    });
++
++    const innerX = x + padding;
++    const innerWidth = plateWidth - padding * 2;
++    const innerHeight = plateHeight - padding * 0.9;
++
++    if (logo) {
++        const maxLogoHeight = innerHeight;
++        const maxLogoWidth = innerWidth;
++        let logoHeight = maxLogoHeight;
++        let logoWidth = logoHeight * logo.aspect;
++
++        if (logoWidth > maxLogoWidth) {
++            logoWidth = maxLogoWidth;
++            logoHeight = logoWidth / logo.aspect;
++        }
++
++        page.drawImage(logo.image, {
++            x: innerX + (innerWidth - logoWidth) / 2,
++            y: fromTop(page, top + padding * 0.45) - logoHeight,
++            width: logoWidth,
++            height: logoHeight,
++        });
++    } else {
++        drawText(page, {
++            x: innerX + (innerWidth - wordmarkWidth) / 2,
++            top: baseline(top + (plateHeight - wordmarkSize) / 2 - 1, wordmarkSize),
++            text: wordmark,
++            font: fonts.bold,
++            size: wordmarkSize,
++            color: theme.color.ink,
++        });
++    }
++}
++
++function drawStatusChip(
++    page: PDFPage,
++    ctx: Ctx,
++    options: {
++        right: number;
++        top: number;
++        height: number;
++        label: string;
++        tone: 'success' | 'warning' | 'neutral';
++    }
++): void {
++    const { theme, fonts } = ctx;
++    const { right, top, height, label, tone } = options;
++    const size = theme.type.micro + 0.4;
++    const text = safeText(label).toUpperCase();
++    const textWidth = trackedWidth(text, fonts.bold, size, 0.9);
++    const width = textWidth + 30;
++
++    const toneColor =
++        tone === 'success'
++            ? theme.color.success
++            : tone === 'warning'
++                ? theme.color.warning
++                : theme.color.primary;
++
++    drawCard(page, {
++        x: right - width,
++        top,
++        width,
++        height,
++        radius: height / 2,
++        color: theme.color.onPrimary,
++        opacity: 0.18,
++    });
++
++    drawBullet(page, {
++        x: right - width + 13,
++        top: top + height / 2,
++        radius: 2.4,
++        color: toneColor,
++    });
++
++    drawTracked(page, {
++        x: right - width + 21,
++        top: baseline(top + (height - size) / 2 - 0.4, size),
++        text,
++        font: fonts.bold,
++        size,
++        color: theme.color.onPrimary,
++        tracking: 0.9,
++    });
++}
++
++/** Page 1 masthead: gradient band, aurora wave, logo plate, title, status. */
++function drawMasthead(ctx: Ctx, page: PDFPage): void {
++    const { theme, fonts, doc } = ctx;
++    const { metrics, color } = theme;
++    const width = page.getSize().width;
++    const bandHeight = metrics.headerHeight - 12;
++
++    drawGradientBand(page, {
++        x: 0,
++        top: 0,
++        width,
++        height: bandHeight,
++        from: color.primaryDark,
++        to: color.primary,
++        direction: 'horizontal',
++    });
++
++    drawAuroraWave(page, theme, bandHeight - 30, 30, width * 0.72);
++
++    // Ticket-style perforated edge under the band.
++    drawPerforation(page, {
++        x: 0,
++        top: bandHeight,
++        width,
++        radius: 4.2,
++        color: color.onPrimary,
++        inset: 14,
++    });
++
++    drawLogoPlate(ctx, page, {
++        x: metrics.pageMargin,
++        top: 22,
++        height: 46,
++        minWidth: 150,
++        padding: 14,
++    });
++
++    drawTracked(page, {
++        x: metrics.pageMargin + 2,
++        top: baseline(80, theme.type.label),
++        text: safeText(doc.cover.insuranceType).toUpperCase(),
++        font: fonts.bold,
++        size: theme.type.label,
++        color: color.onPrimary,
++        opacity: 0.85,
++        tracking: 1.5,
++    });
++
++    const right = width - metrics.pageMargin;
++
++    drawTextRight(page, {
++        x: right,
++        top: baseline(28, theme.type.label),
++        text: 'BILLING DOCUMENT',
++        font: fonts.bold,
++        size: theme.type.label,
++        color: color.onPrimary,
++        opacity: 0.78,
++    });
++
++    drawTextRight(page, {
++        x: right,
++        top: baseline(54, theme.type.display),
++        text: safeText(doc.documentTitle).toUpperCase(),
++        font: fonts.bold,
++        size: theme.type.display,
++        color: color.onPrimary,
++    });
++
++    drawStatusChip(page, ctx, {
++        right,
++        top: 96,
++        height: 22,
++        label: doc.payment.statusLabel,
++        tone: doc.payment.paid ? 'success' : 'warning',
++    });
++}
++
++/** Page 2 masthead: slimmer band with the same visual DNA. */
++function drawCompactMasthead(ctx: Ctx, page: PDFPage, title: string): void {
++    const { theme, fonts, doc } = ctx;
++    const { metrics, color } = theme;
++    const width = page.getSize().width;
++    const bandHeight = metrics.compactHeaderHeight - 10;
++
++    drawGradientBand(page, {
++        x: 0,
++        top: 0,
++        width,
++        height: bandHeight,
++        from: color.primaryDark,
++        to: color.primary,
++        direction: 'horizontal',
++    });
++
++    drawAuroraWave(page, theme, bandHeight - 24, 24, width * 0.6);
++
++    drawPerforation(page, {
++        x: 0,
++        top: bandHeight,
++        width,
++        radius: 3.6,
++        color: color.onPrimary,
++        inset: 14,
++    });
++
++    drawLogoPlate(ctx, page, {
++        x: metrics.pageMargin,
++        top: 18,
++        height: 34,
++        minWidth: 120,
++        padding: 10,
++    });
++
++    const right = width - metrics.pageMargin;
++
++    drawTextRight(page, {
++        x: right,
++        top: baseline(20, theme.type.label),
++        text: `${safeText(doc.documentTitle).toUpperCase()} ${safeText(doc.invoiceNumber)}`,
++        font: fonts.bold,
++        size: theme.type.label,
++        color: color.onPrimary,
++        opacity: 0.85,
++    });
++
++    drawTextRight(page, {
++        x: right,
++        top: baseline(38, theme.type.title),
++        text: title,
++        font: fonts.bold,
++        size: theme.type.title,
++        color: color.onPrimary,
++    });
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 1 — party blocks                                                     */
++/* ------------------------------------------------------------------------ */
++
++function drawParties(ctx: Ctx, page: PDFPage, startTop: number): number {
++    const { theme, fonts, doc } = ctx;
++    const { color, type } = theme;
++    const cols = columnsFor(page, theme);
++
++    // --- Billed to -------------------------------------------------------
++    drawTracked(page, {
++        x: cols.margin,
++        top: baseline(startTop, type.label),
++        text: 'BILLED TO',
++        font: fonts.bold,
++        size: type.label,
++        color: color.primary,
++        tracking: 1.4,
++    });
++
++    let leftTop = startTop + 16;
++    drawText(page, {
++        x: cols.margin,
++        top: baseline(leftTop, type.heading),
++        text: truncate(doc.buyer.displayName, fonts.bold, type.heading, cols.contentWidth / 2),
++        font: fonts.bold,
++        size: type.heading,
++        color: color.ink,
++    });
++
++    leftTop += 16;
++    const leftLines = [
++        ...doc.buyer.addressLines.slice(0, 2),
++        doc.buyer.email,
++        doc.buyer.phone,
++    ].filter(Boolean);
++
++    for (const line of leftLines.slice(0, 4)) {
++        drawText(page, {
++            x: cols.margin,
++            top: baseline(leftTop, type.small),
++            text: truncate(line, fonts.regular, type.small, cols.contentWidth / 2),
++            font: fonts.regular,
++            size: type.small,
++            color: color.body,
++        });
++        leftTop += LINE_HEIGHT.small;
++    }
++
++    // --- Invoice details --------------------------------------------------
++    const detailWidth = 236;
++    const detailX = cols.pageWidth - cols.margin - detailWidth;
++
++    drawTracked(page, {
++        x: detailX,
++        top: baseline(startTop, type.label),
++        text: 'INVOICE DETAILS',
++        font: fonts.bold,
++        size: type.label,
++        color: color.muted,
++        tracking: 1.4,
++    });
++
++    const rows: Array<[string, string]> = [['Invoice number', safeText(doc.invoiceNumber)]];
++
++    if (doc.issueDateText) rows.push(['Issued on', doc.issueDateText]);
++    if (doc.dueDateText) rows.push(['Payment due', doc.dueDateText]);
++    if (doc.payment.methodLabel) rows.push(['Method', doc.payment.methodLabel]);
++    if (doc.payment.reference) {
++        rows.push(['Reference', truncate(doc.payment.reference, fonts.bold, type.small, 120)]);
++    }
++
++    let rightTop = startTop + 14;
++    const rowHeight = 16;
++
++    rows.forEach(([label, value], index) => {
++        if (index > 0) {
++            hairline(page, {
++                x: detailX,
++                top: rightTop - 4.5,
++                width: detailWidth,
++                color: color.hairline,
++                thickness: 0.6,
++            });
++        }
++
++        drawText(page, {
++            x: detailX,
++            top: baseline(rightTop + 2, type.micro),
++            text: label,
++            font: fonts.regular,
++            size: type.micro,
++            color: color.muted,
++        });
++
++        drawTextRight(page, {
++            x: detailX + detailWidth,
++            top: baseline(rightTop + 1, type.small),
++            text: value,
++            font: fonts.bold,
++            size: type.small,
++            color: color.ink,
++        });
++
++        rightTop += rowHeight;
++    });
++
++    return Math.max(leftTop, rightTop + 2);
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 1 — cover summary panel                                              */
++/* ------------------------------------------------------------------------ */
++
++function drawCoverPanel(ctx: Ctx, page: PDFPage, top: number): number {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++    const height = 62;
++
++    drawCard(page, {
++        x: cols.margin,
++        top,
++        width: cols.contentWidth,
++        height,
++        radius: metrics.radius,
++        color: color.surface,
++        borderColor: color.hairline,
++        borderWidth: 0.7,
++    });
++
++    drawSparkle(page, {
++        x: cols.margin + 16,
++        top: top + 14,
++        size: 8,
++        color: color.primary,
++    });
++
++    drawTracked(page, {
++        x: cols.margin + 29,
++        top: baseline(top + 14, type.label),
++        text: 'POLICY & VEHICLE',
++        font: fonts.bold,
++        size: type.label,
++        color: color.ink,
++        tracking: 1.3,
++    });
++
++    drawTextRight(page, {
++        x: cols.pageWidth - cols.margin - 16,
++        top: baseline(top + 14, type.label),
++        text: `POLICY ${safeText(doc.cover.policyNumber).toUpperCase()}`,
++        font: fonts.bold,
++        size: type.label,
++        color: color.primary,
++    });
++
++    const inner = cols.contentWidth - 32;
++    const cells: Array<{ label: string; value: string; hint: string }> = [
++        { label: 'VEHICLE', value: doc.cover.vehicle, hint: doc.cover.vehicleDetail },
++        { label: 'REGISTRATION', value: doc.cover.registration || '-', hint: doc.cover.duration },
++        {
++            label: 'COVER PERIOD',
++            value: doc.cover.periodStart || '-',
++            hint: doc.cover.periodEnd ? `to ${doc.cover.periodEnd}` : '',
++        },
++        { label: 'COVER REASON', value: doc.cover.reason || '-', hint: doc.cover.licence },
++    ];
++
++    const cellWidth = inner / cells.length;
++
++    cells.forEach((cell, index) => {
++        const cellX = cols.margin + 16 + index * cellWidth;
++
++        if (index > 0) {
++            page.drawLine({
++                start: { x: cellX - 10, y: fromTop(page, top + 32) },
++                end: { x: cellX - 10, y: fromTop(page, top + height - 12) },
++                thickness: 0.6,
++                color: color.hairline,
++            });
++        }
++
++        drawText(page, {
++            x: cellX,
++            top: baseline(top + 29, type.micro),
++            text: cell.label,
++            font: fonts.bold,
++            size: type.micro,
++            color: color.muted,
++        });
++
++        drawText(page, {
++            x: cellX,
++            top: baseline(top + 43, type.subheading),
++            text: truncate(cell.value, fonts.bold, type.subheading, cellWidth - 16),
++            font: fonts.bold,
++            size: type.subheading,
++            color: color.ink,
++        });
++
++        if (cell.hint) {
++            drawText(page, {
++                x: cellX,
++                top: baseline(top + 54, type.micro),
++                text: truncate(cell.hint, fonts.regular, type.micro, cellWidth - 16),
++                font: fonts.regular,
++                size: type.micro,
++                color: color.body,
++            });
++        }
++    });
++
++    return top + height;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 1 — amount payable hero card                                         */
++/* ------------------------------------------------------------------------ */
++
++function drawAmountCard(ctx: Ctx, page: PDFPage, top: number): number {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++    const height = 92;
++    const cardBottom = top + height;
++
++    drawCard(page, {
++        x: cols.margin,
++        top,
++        width: cols.contentWidth,
++        height,
++        radius: metrics.radius,
++        color: color.contrastCard,
++    });
++
++    // Soft brand glow behind the seal. Sized and positioned so it always stays
++    // inside the card: a glow that bleeds past the rounded corner looks like a
++    // rendering bug rather than a highlight.
++    const glowX = cols.pageWidth - cols.margin - 84;
++    const glowYScale = Math.min(26, height / 2 - 8);
++    page.drawEllipse({
++        x: glowX,
++        y: fromTop(page, cardBottom - height / 2),
++        xScale: 58,
++        yScale: glowYScale,
++        color: color.primary,
++        opacity: 0.3,
++    });
++
++    // Brand wave filling the bottom strip of the card.
++    drawWave(page, {
++        x: cols.margin + 1,
++        top: cardBottom - 22,
++        width: cols.contentWidth - 2,
++        height: 21,
++        color: color.primary,
++        opacity: 0.38,
++        waves: 2.6,
++        phase: 0.9,
++    });
++
++    drawTracked(page, {
++        x: cols.margin + 20,
++        top: baseline(top + 17, type.label),
++        text: doc.totals.balanceDue > 0 ? 'AMOUNT PAYABLE' : 'TOTAL PAID',
++        font: fonts.bold,
++        size: type.label,
++        color: color.onContrastMuted,
++        tracking: 1.6,
++    });
++
++    drawText(page, {
++        x: cols.margin + 20,
++        top: baseline(top + 43, 27),
++        text: formatMoney(doc.totals.total, doc.currency),
++        font: fonts.bold,
++        size: 27,
++        color: color.onContrast,
++    });
++
++    const words = wrapText(doc.amountInWords, fonts.oblique, type.micro, cols.contentWidth - 200)
++        .slice(0, 2);
++
++    words.forEach((line, index) => {
++        drawText(page, {
++            x: cols.margin + 20,
++            top: baseline(top + 69 + index * LINE_HEIGHT.micro, type.micro),
++            text: line,
++            font: fonts.oblique,
++            size: type.micro,
++            color: color.onContrastMuted,
++        });
++    });
++
++    const statusLine = doc.payment.paid
++        ? `Paid in full${doc.payment.dateText ? ` on ${doc.payment.dateText}` : ''}`
++        : doc.dueDateText
++            ? `Payment due by ${doc.dueDateText}`
++            : 'Payment is required to activate cover';
++
++    drawText(page, {
++        x: cols.margin + 20,
++        top: baseline(top + 69 + words.length * LINE_HEIGHT.micro, type.micro),
++        text: truncate(statusLine, fonts.bold, type.micro, cols.contentWidth - 210),
++        font: fonts.bold,
++        size: type.micro,
++        color: color.onContrast,
++        opacity: 0.9,
++    });
++
++    // Seal: "PAID" stamp when settled, otherwise a "DUE" reminder.
++    const sealRadius = 27;
++    const sealCx = cols.pageWidth - cols.margin - 80;
++    const sealTop = top + 19;
++
++    if (doc.payment.paid && doc.totals.balanceDue <= 0) {
++        drawSeal(page, {
++            cx: sealCx,
++            top: sealTop,
++            radius: sealRadius,
++            fillColor: color.success,
++            fillOpacity: 0.25,
++            ringColor: color.onContrast,
++            ringOpacity: 0.9,
++            label: 'PAID',
++            labelFont: fonts.bold,
++            labelSize: 14,
++            labelColor: color.onContrast,
++            labelOpacity: 1,
++            dashedRing: true,
++        });
++    } else {
++        drawSeal(page, {
++            cx: sealCx,
++            top: sealTop,
++            radius: sealRadius,
++            fillColor: color.onContrast,
++            fillOpacity: 0.12,
++            ringColor: color.onContrast,
++            ringOpacity: 0.75,
++            label: 'DUE',
++            labelFont: fonts.bold,
++            labelSize: 14,
++            labelColor: color.onContrast,
++            labelOpacity: 1,
++            dashedRing: true,
++        });
++    }
++
++    return cardBottom;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 1 — items table                                                      */
++/* ------------------------------------------------------------------------ */
++
++/**
++ * Flow state shared by the table / totals renderers: which page we are on and
++ * how far down it we have drawn.
++ */
++interface Flow {
++    ctx: Ctx;
++    pdf: PDFDocument;
++    /** Every page used by the invoice (page 1 plus any continuation pages). */
++    pages: PDFPage[];
++    page: PDFPage;
++    cursor: number;
++    /** Right-hand masthead text used by continuation pages. */
++    summaryTitle: string;
++}
++
++/** Last y content may occupy before the footer zone begins. */
++function contentBottom(ctx: Ctx, page: PDFPage): number {
++    return page.getSize().height - ctx.theme.metrics.footerHeight - 12;
++}
++
++/** Start a new invoice page with the compact masthead and a "(continued)" tag. */
++function startContinuationPage(flow: Flow): void {
++    const page = flow.pdf.addPage();
++    drawCompactMasthead(flow.ctx, page, flow.summaryTitle);
++    flow.pages.push(page);
++    flow.page = page;
++    flow.cursor = flow.ctx.theme.metrics.compactHeaderHeight + 34;
++
++    // "Continued" marker keeps multi-page documents unambiguous.
++    const { theme, fonts } = flow.ctx;
++    drawTextRight(flow.page, {
++        x: page.getSize().width - theme.metrics.pageMargin,
++        top: baseline(flow.cursor - 16, theme.type.label),
++        text: 'CONTINUED',
++        font: fonts.bold,
++        size: theme.type.label,
++        color: theme.color.muted,
++    });
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 1+ — items table                                                     */
++/* ------------------------------------------------------------------------ */
++
++interface RowLayout {
++    descriptionLines: string[];
++    detailLines: string[];
++    height: number;
++}
++
++/** Everything the table needs to know about a row before it is drawn. */
++function layoutRow(ctx: Ctx, page: PDFPage, item: InvoiceLineItem): RowLayout {
++    const { theme, fonts } = ctx;
++    const { type } = theme;
++    const cols = columnsFor(page, theme);
++
++    const descriptionLines = wrapText(item.description, fonts.bold, type.body, cols.descWidth);
++    const detailLines = item.details
++        .flatMap((detail) => wrapText(detail, fonts.regular, type.micro, cols.descWidth))
++        .slice(0, DETAIL_LINES_MAX);
++
++    const descriptionHeight = descriptionLines.length * LINE_HEIGHT.body;
++    const detailHeight = detailLines.length * LINE_HEIGHT.micro;
++
++    return {
++        descriptionLines,
++        detailLines,
++        height: Math.max(26, descriptionHeight + detailHeight + 14),
++    };
++}
++
++function drawRow(
++    ctx: Ctx,
++    page: PDFPage,
++    options: { top: number; item: InvoiceLineItem; layout: RowLayout; shaded?: boolean }
++): number {
++    const { theme, fonts } = ctx;
++    const { color, type } = theme;
++    const cols = columnsFor(page, theme);
++    const { top, item, layout, shaded } = options;
++
++    if (shaded) {
++        drawCard(page, {
++            x: cols.margin - 6,
++            top: top - 3,
++            width: cols.contentWidth + 12,
++            height: layout.height,
++            radius: theme.metrics.radiusSmall,
++            color: color.primarySoft,
++        });
++    }
++
++    const firstBaselineTop = top + 5;
++    let cursor = firstBaselineTop;
++
++    layout.descriptionLines.forEach((line) => {
++        drawText(page, {
++            x: cols.descX,
++            top: baseline(cursor, type.body),
++            text: line,
++            font: fonts.bold,
++            size: type.body,
++            color: item.kind === 'discount' ? color.primary : color.ink,
++        });
++        cursor += LINE_HEIGHT.body;
++    });
++
++    layout.detailLines.forEach((line) => {
++        drawText(page, {
++            x: cols.descX,
++            top: baseline(cursor, type.micro),
++            text: line,
++            font: fonts.regular,
++            size: type.micro,
++            color: color.muted,
++        });
++        cursor += LINE_HEIGHT.micro;
++    });
++
++    drawTextCenter(page, {
++        x: cols.qtyCenter - 20,
++        width: 40,
++        top: baseline(firstBaselineTop, type.small),
++        text: String(item.quantity),
++        font: fonts.regular,
++        size: type.small,
++        color: color.body,
++    });
++
++    drawTextRight(page, {
++        x: cols.unitRight,
++        top: baseline(firstBaselineTop, type.small),
++        text: formatMoney(item.unitPrice, ctx.doc.currency),
++        font: fonts.regular,
++        size: type.small,
++        color: color.body,
++    });
++
++    drawTextRight(page, {
++        x: cols.amountRight,
++        top: baseline(firstBaselineTop, type.body),
++        text: formatMoney(item.amount, ctx.doc.currency),
++        font: fonts.bold,
++        size: type.body,
++        color: item.kind === 'discount' ? color.primary : color.ink,
++    });
++
++    return top + layout.height;
++}
++
++/** Column header row; redrawn on every page the table continues onto. */
++function drawTableHeader(ctx: Ctx, page: PDFPage, top: number, continued: boolean): number {
++    const { theme, fonts } = ctx;
++    const { color, type } = theme;
++    const cols = columnsFor(page, theme);
++
++    drawTracked(page, {
++        x: cols.margin,
++        top: baseline(top, type.label),
++        text: continued ? 'CHARGES (CONTINUED)' : 'CHARGES',
++        font: fonts.bold,
++        size: type.label,
++        color: color.muted,
++        tracking: 1.4,
++    });
++
++    const ruleTop = top + 12;
++    hairline(page, {
++        x: cols.margin,
++        top: ruleTop,
++        width: cols.contentWidth,
++        color: color.primary,
++        thickness: 1.4,
++    });
++
++    const headerTop = ruleTop + 9;
++
++    drawText(page, {
++        x: cols.descX,
++        top: baseline(headerTop, type.label),
++        text: 'DESCRIPTION',
++        font: fonts.bold,
++        size: type.label,
++        color: color.ink,
++    });
++
++    drawTextCenter(page, {
++        x: cols.qtyCenter - 20,
++        width: 40,
++        top: baseline(headerTop, type.label),
++        text: 'QTY',
++        font: fonts.bold,
++        size: type.label,
++        color: color.ink,
++    });
++
++    drawTextRight(page, {
++        x: cols.unitRight,
++        top: baseline(headerTop, type.label),
++        text: 'UNIT PRICE',
++        font: fonts.bold,
++        size: type.label,
++        color: color.ink,
++    });
++
++    drawTextRight(page, {
++        x: cols.amountRight,
++        top: baseline(headerTop, type.label),
++        text: 'AMOUNT',
++        font: fonts.bold,
++        size: type.label,
++        color: color.ink,
++    });
++
++    const headerBottom = headerTop + 8;
++    hairline(page, {
++        x: cols.margin,
++        top: headerBottom,
++        width: cols.contentWidth,
++        color: color.hairline,
++        thickness: 0.8,
++    });
++
++    return headerBottom + 7;
++}
++
++/**
++ * Draw the charges table, continuing on new pages when it runs out of room.
++ *
++ * Reserves enough space at the bottom of the last page for the totals block,
++ * so the totals are never orphaned on their own page unless the table itself
++ * already fills a page.
++ */
++function drawChargesTable(flow: Flow): void {
++    const { ctx } = flow;
++    const { theme, doc } = ctx;
++    const reserve = TABLE_TO_TOTALS_GAP + totalsHeight(ctx) + 8;
++
++    flow.cursor = drawTableHeader(ctx, flow.page, flow.cursor, false);
++
++    let shown = 0;
++    let rowsOnPage = 0;
++
++    for (const item of doc.items) {
++        const layout = layoutRow(ctx, flow.page, item);
++
++        const isLast = shown === doc.items.length - 1;
++        const bottom = contentBottom(ctx, flow.page);
++        const needed = layout.height + (isLast ? reserve : 8);
++
++        if (flow.cursor + needed > bottom && rowsOnPage > 0) {
++            startContinuationPage(flow);
++            flow.cursor = drawTableHeader(ctx, flow.page, flow.cursor, true);
++            rowsOnPage = 0;
++        }
++
++        if (rowsOnPage > 0) {
++            const cols = columnsFor(flow.page, theme);
++            hairline(flow.page, {
++                x: cols.margin,
++                top: flow.cursor,
++                width: cols.contentWidth,
++                color: theme.color.hairline,
++                thickness: 0.6,
++            });
++            flow.cursor += 7;
++        }
++
++        flow.cursor = drawRow(ctx, flow.page, {
++            top: flow.cursor,
++            item,
++            layout,
++            shaded: item.kind === 'discount',
++        });
++
++        shown += 1;
++        rowsOnPage += 1;
++    }
++
++    flow.cursor += TABLE_TO_TOTALS_GAP;
++}
++
++/* Totals block metrics — defined once so the page-break calculation and the
++   renderer can never drift apart. */
++const TOTALS_ROW_HEIGHT = 16;
++const TOTALS_PILL_HEIGHT = 32;
++const TABLE_TO_TOTALS_GAP = 10;
++
++/** Exact height of the totals block for the current document. */
++function totalsHeight(ctx: Ctx): number {
++    const { doc } = ctx;
++    const rows =
++        1 +
++        (doc.totals.discount > 0 ? 1 : 0) +
++        (doc.totals.taxAmount > 0 ? 1 : 0);
++
++    return (
++        rows * TOTALS_ROW_HEIGHT +
++        2 +
++        TOTALS_PILL_HEIGHT +
++        10 +
++        (doc.totals.amountPaid > 0 ? TOTALS_ROW_HEIGHT : 0) +
++        10
++    );
++}
++
++function drawTotalsBlock(ctx: Ctx, page: PDFPage, top: number): number {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++
++    const blockWidth = 236;
++    const blockX = cols.pageWidth - cols.margin - blockWidth;
++
++    let rowTop = top;
++    const total = doc.totals;
++
++    const rows: Array<{ label: string; value: string; tone?: 'primary' | 'ink' | 'muted' }> = [
++        { label: 'Subtotal', value: formatMoney(total.subtotal, doc.currency) },
++    ];
++
++    if (total.discount > 0) {
++        rows.push({
++            label: truncate(total.discountLabel, fonts.regular, type.small, 150),
++            value: `-${formatMoney(total.discount, doc.currency)}`,
++            tone: 'primary',
++        });
++    }
++
++    if (total.taxAmount > 0) {
++        rows.push({
++            label: `${total.taxLabel}${total.taxRate > 0 ? ` (${total.taxRate}%)` : ''}${total.taxInclusive ? ' incl.' : ''}`,
++            value: formatMoney(total.taxAmount, doc.currency),
++        });
++    }
++
++    rows.forEach((row) => {
++        drawText(page, {
++            x: blockX,
++            top: baseline(rowTop, type.small),
++            text: row.label,
++            font: fonts.regular,
++            size: type.small,
++            color: color.body,
++        });
++
++        drawTextRight(page, {
++            x: blockX + blockWidth,
++            top: baseline(rowTop, type.small),
++            text: row.value,
++            font: fonts.bold,
++            size: type.small,
++            color: row.tone === 'primary' ? color.primary : color.ink,
++        });
++
++        rowTop += TOTALS_ROW_HEIGHT;
++    });
++
++    rowTop += 2;
++
++    // Grand total: dark pill echoing the hero card.
++    drawCard(page, {
++        x: blockX - 12,
++        top: rowTop,
++        width: blockWidth + 12,
++        height: TOTALS_PILL_HEIGHT,
++        radius: metrics.radiusSmall,
++        color: color.contrastCard,
++    });
++
++    drawTracked(page, {
++        x: blockX + 2,
++        top: baseline(rowTop + (TOTALS_PILL_HEIGHT - type.label) / 2 - 1, type.label),
++        text: 'TOTAL',
++        font: fonts.bold,
++        size: type.label,
++        color: color.onContrastMuted,
++        tracking: 1.6,
++    });
++
++    drawTextRight(page, {
++        x: blockX + blockWidth - 2,
++        top: baseline(rowTop + (TOTALS_PILL_HEIGHT - 14) / 2 - 1, 14),
++        text: formatMoney(total.total, doc.currency),
++        font: fonts.bold,
++        size: 14,
++        color: color.onContrast,
++    });
++
++    rowTop += TOTALS_PILL_HEIGHT + 10;
++
++    if (total.amountPaid > 0) {
++        drawText(page, {
++            x: blockX,
++            top: baseline(rowTop, type.small),
++            text: 'Amount paid',
++            font: fonts.regular,
++            size: type.small,
++            color: color.body,
++        });
++
++        drawTextRight(page, {
++            x: blockX + blockWidth,
++            top: baseline(rowTop, type.small),
++            text: `-${formatMoney(total.amountPaid, doc.currency)}`,
++            font: fonts.bold,
++            size: type.small,
++            color: color.success,
++        });
++
++        rowTop += TOTALS_ROW_HEIGHT;
++    }
++
++    drawText(page, {
++        x: blockX,
++        top: baseline(rowTop, type.subheading),
++        text: 'Balance due',
++        font: fonts.bold,
++        size: type.subheading,
++        color: color.ink,
++    });
++
++    drawTextRight(page, {
++        x: blockX + blockWidth,
++        top: baseline(rowTop, type.subheading),
++        text: formatMoney(total.balanceDue, doc.currency),
++        font: fonts.bold,
++        size: type.subheading,
++        color: total.balanceDue > 0 ? color.warning : color.success,
++    });
++
++    return rowTop + 10;
++}
++
++/**
++ * Totals block. Moved to a fresh page when it would collide with the footer.
++ */
++function drawTotalsSection(flow: Flow): void {
++    const { ctx } = flow;
++    const { theme } = ctx;
++    const height = totalsHeight(ctx);
++
++    if (flow.cursor + height > contentBottom(ctx, flow.page)) {
++        startContinuationPage(flow);
++        flow.cursor = theme.metrics.compactHeaderHeight + 30;
++    }
++
++    const afterTotals = drawTotalsBlock(ctx, flow.page, flow.cursor);
++    flow.cursor = afterTotals;
++
++    drawClosingNote(ctx, flow.page, afterTotals + 12);
++}
++
++/** Small closing line above the footer (skipped when there is no room). */
++function drawClosingNote(ctx: Ctx, page: PDFPage, top: number): void {
++    const { theme, fonts, doc } = ctx;
++    const { color, type } = theme;
++    const cols = columnsFor(page, theme);
++    const limit = page.getSize().height - theme.metrics.footerHeight - 34;
++
++    if (top > limit) return;
++
++    hairline(page, {
++        x: cols.margin,
++        top,
++        width: cols.contentWidth,
++        color: color.hairline,
++        thickness: 0.7,
++    });
++
++    drawTextCenter(page, {
++        x: cols.margin,
++        width: cols.contentWidth,
++        top: baseline(top + 12, type.small),
++        text: doc.notes.thankYou,
++        font: fonts.bold,
++        size: type.small,
++        color: color.ink,
++    });
++
++    drawTextCenter(page, {
++        x: cols.margin,
++        width: cols.contentWidth,
++        top: baseline(top + 25, type.micro),
++        text: 'Keep this invoice with your policy documents. It was issued electronically.',
++        font: fonts.regular,
++        size: type.micro,
++        color: color.muted,
++    });
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 2 — recap, payment summary                                           */
++/* ------------------------------------------------------------------------ */
++
++function sectionHeading(ctx: Ctx, page: PDFPage, top: number, title: string): number {
++    const { theme, fonts } = ctx;
++    const { color, type } = theme;
++
++    drawBullet(page, {
++        x: theme.metrics.pageMargin + 3.6,
++        top: top + 4,
++        radius: 3,
++        color: color.primary,
++    });
++
++    drawText(page, {
++        x: theme.metrics.pageMargin + 16,
++        top: baseline(top, type.heading),
++        text: title,
++        font: fonts.bold,
++        size: type.heading,
++        color: color.ink,
++    });
++
++    return top + 23;
++}
++
++function drawRecapCard(ctx: Ctx, page: PDFPage, top: number): number {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++    const height = 64;
++
++    drawCard(page, {
++        x: cols.margin,
++        top,
++        width: cols.contentWidth,
++        height,
++        radius: metrics.radius,
++        color: color.surface,
++        borderColor: color.hairline,
++        borderWidth: 0.7,
++    });
++
++    const period = doc.cover.periodEnd
++        ? `${doc.cover.periodStart || '-'} to ${doc.cover.periodEnd}`
++        : doc.cover.periodStart || '-';
++
++    const cells = [
++        { label: 'INVOICE', value: doc.invoiceNumber },
++        { label: 'VEHICLE', value: doc.cover.vehicle },
++        { label: 'REGISTRATION', value: doc.cover.registration || '-' },
++        { label: 'COVER PERIOD', value: period, small: true },
++    ];
++
++    const inner = cols.contentWidth - 32;
++    const cellWidth = inner / cells.length;
++
++    cells.forEach((cell, index) => {
++        const cellX = cols.margin + 16 + index * cellWidth;
++
++        if (index > 0) {
++            page.drawLine({
++                start: { x: cellX - 10, y: fromTop(page, top + 16) },
++                end: { x: cellX - 10, y: fromTop(page, top + height - 14) },
++                thickness: 0.6,
++                color: color.hairline,
++            });
++        }
++
++        drawText(page, {
++            x: cellX,
++            top: baseline(top + 17, type.micro),
++            text: cell.label,
++            font: fonts.bold,
++            size: type.micro,
++            color: color.muted,
++        });
++
++        // Periods are long: wrap to two lines at a slightly smaller size.
++        const valueSize = cell.small ? type.small : type.subheading;
++        const valueLines = wrapText(cell.value, fonts.bold, valueSize, cellWidth - 16).slice(0, 2);
++
++        valueLines.forEach((line, lineIndex) => {
++            drawText(page, {
++                x: cellX,
++                top: baseline(top + 35 + lineIndex * LINE_HEIGHT.small, valueSize),
++                text: line,
++                font: fonts.bold,
++                size: valueSize,
++                color: color.ink,
++            });
++        });
++    });
++
++    return top + height;
++}
++
++function drawPaymentSummary(ctx: Ctx, page: PDFPage, top: number): number {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++
++    let cursor = sectionHeading(ctx, page, top, 'Payment summary');
++
++    const rows: Array<[string, string]> = [['Status', doc.payment.statusLabel]];
++    if (doc.payment.methodLabel) rows.push(['Method', doc.payment.methodLabel]);
++    if (doc.payment.paid && doc.payment.dateText) rows.push(['Paid on', doc.payment.dateText]);
++    if (doc.payment.reference) rows.push(['Reference', doc.payment.reference]);
++    if (doc.buyer.reference) rows.push(['Account', doc.buyer.reference]);
++    rows.push(['Amount', formatMoney(doc.totals.total, doc.currency)]);
++    if (doc.totals.balanceDue !== doc.totals.total) {
++        rows.push(['Balance due', formatMoney(doc.totals.balanceDue, doc.currency)]);
++    }
++
++    const detailWidth = cols.contentWidth * 0.52 - 20;
++    const termsWidth = cols.contentWidth * 0.48 - 20;
++    const termLines = doc.terms
++        ? wrapText(doc.terms, fonts.regular, type.micro, termsWidth).slice(0, 8)
++        : [];
++
++    const rowsHeight = rows.length * 13.8;
++    const termsHeight = termLines.length ? termLines.length * LINE_HEIGHT.micro + 12 : 0;
++    const height = Math.max(rowsHeight, termsHeight, 60) + 34;
++
++    drawCard(page, {
++        x: cols.margin,
++        top: cursor,
++        width: cols.contentWidth,
++        height,
++        radius: metrics.radius,
++        color: color.onPrimary,
++        borderColor: color.hairline,
++        borderWidth: 0.8,
++    });
++
++    // Left: payment details.
++    let rowTop = cursor + 20;
++    rows.forEach(([label, value]) => {
++        drawText(page, {
++            x: cols.margin + 18,
++            top: baseline(rowTop, type.micro),
++            text: label,
++            font: fonts.regular,
++            size: type.micro,
++            color: color.muted,
++        });
++
++        drawTextRight(page, {
++            x: cols.margin + 18 + detailWidth,
++            top: baseline(rowTop, type.small),
++            text: truncate(value, fonts.bold, type.small, detailWidth),
++            font: fonts.bold,
++            size: type.small,
++            color: label === 'Balance due' ? color.warning : color.ink,
++        });
++
++        rowTop += 13.8;
++    });
++
++    // Divider between the two halves.
++    const dividerX = cols.margin + cols.contentWidth * 0.52;
++    page.drawLine({
++        start: { x: dividerX, y: fromTop(page, cursor + 16) },
++        end: { x: dividerX, y: fromTop(page, cursor + height - 16) },
++        thickness: 0.6,
++        color: color.hairline,
++    });
++
++    // Right: terms & conditions.
++    drawTracked(page, {
++        x: dividerX + 18,
++        top: baseline(cursor + 20, type.label),
++        text: 'TERMS & REFUNDS',
++        font: fonts.bold,
++        size: type.label,
++        color: color.primary,
++        tracking: 1.3,
++    });
++
++    let lineTop = cursor + 36;
++    termLines.forEach((line) => {
++        drawText(page, {
++            x: dividerX + 18,
++            top: baseline(lineTop, type.micro),
++            text: line,
++            font: fonts.regular,
++            size: type.micro,
++            color: color.body,
++        });
++        lineTop += LINE_HEIGHT.micro;
++    });
++
++    return cursor + height;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 2 — delivery steps                                                   */
++/* ------------------------------------------------------------------------ */
++
++function drawAccessSteps(ctx: Ctx, page: PDFPage, top: number): number {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++
++    let cursor = sectionHeading(ctx, page, top, 'How to access your documents');
++
++    const gap = 16;
++    const cardWidth = (cols.contentWidth - gap) / 2;
++    const steps = doc.notes.accessSteps.slice(0, 2);
++
++    const bodyLines = steps.map((step) =>
++        wrapText(step.body, fonts.regular, type.micro, cardWidth - 32)
++    );
++    const cardHeight = 66 + Math.max(...bodyLines.map((lines) => lines.length)) * LINE_HEIGHT.micro;
++
++    steps.forEach((step, index) => {
++        const cardX = cols.margin + index * (cardWidth + gap);
++
++        drawCard(page, {
++            x: cardX,
++            top: cursor,
++            width: cardWidth,
++            height: cardHeight,
++            radius: metrics.radius,
++            color: color.onPrimary,
++            borderColor: color.hairline,
++            borderWidth: 0.8,
++        });
++
++        page.drawSvgPath(circlePath(11), {
++            x: cardX + 23,
++            y: fromTop(page, cursor + 25),
++            color: color.primarySoft,
++        });
++
++        const number = String(index + 1);
++        const numberWidth = fonts.bold.widthOfTextAtSize(number, type.subheading);
++        drawText(page, {
++            x: cardX + 23 - numberWidth / 2,
++            top: baseline(cursor + 25 - type.subheading * 0.34, type.subheading),
++            text: number,
++            font: fonts.bold,
++            size: type.subheading,
++            color: color.primary,
++        });
++
++        drawText(page, {
++            x: cardX + 42,
++            top: baseline(cursor + 21, type.subheading),
++            text: step.title,
++            font: fonts.bold,
++            size: type.subheading,
++            color: color.ink,
++        });
++
++        let lineTop = cursor + 40;
++        bodyLines[index].forEach((line) => {
++            drawText(page, {
++                x: cardX + 16,
++                top: baseline(lineTop, type.micro),
++                text: line,
++                font: fonts.regular,
++                size: type.micro,
++                color: color.body,
++            });
++            lineTop += LINE_HEIGHT.micro;
++        });
++    });
++
++    cursor += cardHeight;
++    return cursor;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 2 — inclusions + important information grid                          */
++/* ------------------------------------------------------------------------ */
++
++function drawSectionsGrid(ctx: Ctx, page: PDFPage, top: number): number {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++
++    const gap = 16;
++    const columnWidth = (cols.contentWidth - gap) / 2;
++
++    // --- two headings sharing one baseline -------------------------------
++    const rightX = cols.margin + columnWidth + gap;
++
++    for (const [headingX, heading] of [
++        [cols.margin, "What's included"],
++        [rightX, 'Important information'],
++    ] as Array<[number, string]>) {
++        drawBullet(page, {
++            x: headingX + 3.6,
++            top: top + 4,
++            radius: 3,
++            color: color.primary,
++        });
++
++        drawText(page, {
++            x: headingX + 16,
++            top: baseline(top, type.heading),
++            text: heading,
++            font: fonts.bold,
++            size: type.heading,
++            color: color.ink,
++        });
++    }
++
++    const cursor = top + 23;
++
++    // --- left card: what's included --------------------------------------
++    const included = doc.notes.included.slice(0, 4);
++    const itemWidth = columnWidth - 44;
++    const includedLines = included.map((item) =>
++        wrapText(item, fonts.regular, type.small, itemWidth).slice(0, 2)
++    );
++    const includedRowHeight = Math.max(...includedLines.map((lines) => lines.length)) * 12 + 8;
++
++    // --- right card: important bullets -----------------------------------
++    const important = doc.notes.important.slice(0, 5);
++    const bulletLines = important.map((bullet) =>
++        wrapText(bullet, fonts.regular, type.micro, columnWidth - 35)
++    );
++    const bulletHeight =
++        bulletLines.reduce((sum, lines) => sum + lines.length * LINE_HEIGHT.micro + 5, 0) + 22;
++
++    const includedHeight = includedRowHeight * included.length + 22;
++    const cardHeight = Math.max(includedHeight, bulletHeight);
++
++    drawCard(page, {
++        x: cols.margin,
++        top: cursor,
++        width: columnWidth,
++        height: cardHeight,
++        radius: metrics.radius,
++        color: color.primarySoft,
++    });
++
++    let checkTop = cursor + 22;
++
++    includedLines.forEach((lines, index) => {
++        const itemTop = checkTop + 5.5;
++        const itemX = cols.margin + 18;
++
++        page.drawSvgPath(circlePath(6.6), {
++            x: itemX + 6.6,
++            y: fromTop(page, itemTop),
++            color: color.primary,
++        });
++
++        const checkSize = 7.6;
++        page.drawSvgPath(checkPath(checkSize), {
++            x: itemX + 6.6 - checkSize / 2,
++            y: fromTop(page, itemTop + 0.4) + checkSize * 0.3,
++            borderColor: color.onPrimary,
++            borderWidth: 1.3,
++        });
++
++        lines.forEach((line, lineIndex) => {
++            drawText(page, {
++                x: itemX + 20,
++                top: baseline(cursor + 22 + index * includedRowHeight + lineIndex * 12, type.small),
++                text: line,
++                font: fonts.regular,
++                size: type.small,
++                color: color.ink,
++            });
++        });
++
++        checkTop += includedRowHeight;
++    });
++
++    drawCard(page, {
++        x: rightX,
++        top: cursor,
++        width: columnWidth,
++        height: cardHeight,
++        radius: metrics.radius,
++        color: color.surface,
++        borderColor: color.hairline,
++        borderWidth: 0.7,
++    });
++
++    let bulletTop = cursor + 18;
++    bulletLines.forEach((lines, index) => {
++        drawBullet(page, {
++            x: rightX + 18,
++            top: bulletTop + 3.4,
++            radius: 1.9,
++            color: color.primary,
++        });
++
++        lines.forEach((line) => {
++            drawText(page, {
++                x: rightX + 28,
++                top: baseline(bulletTop, type.micro),
++                text: line,
++                font: fonts.regular,
++                size: type.micro,
++                color: color.body,
++            });
++            bulletTop += LINE_HEIGHT.micro;
++        });
++
++        if (index < bulletLines.length - 1) bulletTop += 5;
++    });
++
++    return cursor + cardHeight;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Page 2 — help card                                                        */
++/* ------------------------------------------------------------------------ */
++
++function drawHelpCard(ctx: Ctx, page: PDFPage, top: number): void {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++    const height = 74;
++    const limit = page.getSize().height - metrics.footerHeight - 12;
++
++    if (top + height > limit) return;
++
++    drawCard(page, {
++        x: cols.margin,
++        top,
++        width: cols.contentWidth,
++        height,
++        radius: metrics.radius,
++        color: color.contrastCard,
++    });
++
++    drawWave(page, {
++        x: cols.margin + 1,
++        top: top + height - 22,
++        width: cols.contentWidth - 2,
++        height: 21,
++        color: color.primary,
++        opacity: 0.45,
++        waves: 2.4,
++        phase: 1.6,
++    });
++
++    drawTracked(page, {
++        x: cols.margin + 20,
++        top: baseline(top + 18, type.label),
++        text: 'NEED HELP?',
++        font: fonts.bold,
++        size: type.label,
++        color: color.onContrastMuted,
++        tracking: 1.5,
++    });
++
++    drawText(page, {
++        x: cols.margin + 20,
++        top: baseline(top + 36, type.small),
++        text: 'Our support team can re-issue documents, correct details and answer cover questions.',
++        font: fonts.regular,
++        size: type.small,
++        color: color.onContrast,
++    });
++
++    const contactParts = [
++        doc.seller.email ? `Email ${doc.seller.email}` : '',
++        doc.seller.phone ? `Phone ${doc.seller.phone}` : '',
++        doc.seller.website ? `Web ${doc.seller.website}` : '',
++    ].filter(Boolean);
++
++    drawText(page, {
++        x: cols.margin + 20,
++        top: baseline(top + 52, type.small),
++        text: truncate(
++            contactParts.join('   -   ') || 'Contact us through the contact page on our website.',
++            fonts.bold,
++            type.small,
++            cols.contentWidth - 40
++        ),
++        font: fonts.bold,
++        size: type.small,
++        color: color.onContrast,
++    });
++
++    const legal = [
++        doc.seller.name,
++        doc.seller.registration ? `Reg. ${doc.seller.registration}` : '',
++        doc.seller.vatNumber ? `Tax/VAT ${doc.seller.vatNumber}` : '',
++    ].filter(Boolean);
++
++    drawText(page, {
++        x: cols.margin + 20,
++        top: baseline(top + 63, type.micro),
++        text: truncate(legal.join('  ·  '), fonts.regular, type.micro, cols.contentWidth - 40),
++        font: fonts.regular,
++        size: type.micro,
++        color: color.onContrastMuted,
++    });
++}
++
++/* ------------------------------------------------------------------------ */
++/* Footer                                                                    */
++/* ------------------------------------------------------------------------ */
++
++function drawPageFooter(ctx: Ctx, page: PDFPage, pageNumber: number): void {
++    const { theme, fonts, doc } = ctx;
++    const { color, type, metrics } = theme;
++    const cols = columnsFor(page, theme);
++    const pageHeight = page.getSize().height;
++    const footerTop = pageHeight - metrics.footerHeight;
++    const baselineTop = footerTop + 18;
++
++    hairline(page, {
++        x: cols.margin,
++        top: footerTop,
++        width: cols.contentWidth,
++        color: color.hairline,
++        thickness: 0.7,
++    });
++
++    const leftParts = [
++        doc.seller.name,
++        doc.seller.registration ? `Reg. ${doc.seller.registration}` : '',
++        doc.seller.email,
++        doc.seller.website,
++    ].filter(Boolean);
++
++    drawText(page, {
++        x: cols.margin,
++        top: baseline(baselineTop, type.micro),
++        text: truncate(leftParts.join('  ·  '), fonts.regular, type.micro, cols.contentWidth - 120),
++        font: fonts.regular,
++        size: type.micro,
++        color: color.muted,
++    });
++
++    drawTextRight(page, {
++        x: cols.pageWidth - cols.margin,
++        top: baseline(baselineTop, type.micro),
++        text: `Page ${pageNumber} of ${ctx.totalPages}`,
++        font: fonts.bold,
++        size: type.micro,
++        color: color.muted,
++    });
++
++    drawText(page, {
++        x: cols.margin,
++        top: baseline(baselineTop + 12, type.micro),
++        text: truncate(doc.footerNote, fonts.regular, type.micro, cols.contentWidth - 150),
++        font: fonts.regular,
++        size: type.micro,
++        color: color.faint,
++    });
++
++    drawTextRight(page, {
++        x: cols.pageWidth - cols.margin,
++        top: baseline(baselineTop + 12, type.micro),
++        text: `Generated ${doc.generatedText}`,
++        font: fonts.regular,
++        size: type.micro,
++        color: color.faint,
++    });
++
++    // Small brand flourish above the footer rule.
++    drawSparkle(page, {
++        x: cols.pageWidth - cols.margin - 8,
++        top: footerTop - 16,
++        size: 6,
++        color: color.primary,
++        opacity: 0.7,
++    });
++}
++
++export type { InvoiceLogo };
+diff --git a/lib/invoice/theme.ts b/lib/invoice/theme.ts
+new file mode 100644
+index 0000000..fa15122
+--- /dev/null
++++ b/lib/invoice/theme.ts
+@@ -0,0 +1,154 @@
++/**
++ * The invoice design system.
++ *
++ * One place that defines the look of every generated invoice: palette, type
++ * scale, spacing and corner radii. The brand colour comes from the site
++ * settings, everything else is a deliberately restrained, print-first system
++ * so that any deployment's invoice looks like it was designed on purpose.
++ */
++
++import { rgb } from 'pdf-lib';
++import { shadeHexColor, tintHexColor } from '@/core/helpers';
++import type { InvoiceBranding } from './types';
++
++/**
++ * Fallback brand colour for sites that have not configured one.
++ * Mirrors `DEFAULT_BRAND_COLOR` in `lib/email-theme.ts` (kept local so the
++ * renderer never imports the database-backed email module).
++ */
++export const DEFAULT_BRAND_COLOR = '#0d9488';
++
++export interface InvoicePalette {
++    /** Headline / high-emphasis text. */
++    ink: string;
++    /** Body copy. */
++    body: string;
++    /** Secondary and meta text. */
++    muted: string;
++    /** Faintest text (footer small print). */
++    faint: string;
++    /** Hairlines and table borders. */
++    hairline: string;
++    /** Panel background. */
++    surface: string;
++    /** Slightly darker surface for table headers. */
++    surfaceAlt: string;
++    /** Brand colour. */
++    primary: string;
++    /** Darker brand shade used for gradients and emphasis. */
++    primaryDark: string;
++    /** Very light brand tint used for soft fills. */
++    primarySoft: string;
++    /** Mid brand tint used for decorative waves. */
++    primaryTint: string;
++    /** Text colour that reads on the brand colour. */
++    onPrimary: string;
++    /** Success (paid) accent. */
++    success: string;
++    /** Warning (due) accent. */
++    warning: string;
++    /** Card that carries the amount payable. */
++    contrastCard: string;
++    contrastCardEnd: string;
++    onContrast: string;
++    onContrastMuted: string;
++}
++
++export interface InvoiceTypeScale {
++    display: number;
++    title: number;
++    heading: number;
++    subheading: number;
++    label: number;
++    body: number;
++    small: number;
++    micro: number;
++}
++
++export interface InvoiceMetrics {
++    pageMargin: number;
++    /** Height of the full masthead on page 1. */
++    headerHeight: number;
++    /** Height of the compact masthead on continuation pages. */
++    compactHeaderHeight: number;
++    /** Height of the footer zone reserved at the bottom of every page. */
++    footerHeight: number;
++    /** Standard card radius. */
++    radius: number;
++    radiusSmall: number;
++}
++
++export interface InvoiceTheme {
++    palette: InvoicePalette;
++    type: InvoiceTypeScale;
++    metrics: InvoiceMetrics;
++    /** `rgb()` colours pre-computed for pdf-lib. */
++    color: Record<keyof InvoicePalette, ReturnType<typeof rgb>>;
++    fonts: 'helvetica';
++}
++
++export function createInvoiceTheme(branding: InvoiceBranding): InvoiceTheme {
++    const primary = branding.primaryColor;
++
++    const palette: InvoicePalette = {
++        ink: '#0B1220',
++        body: '#3F4C5F',
++        muted: '#7A889B',
++        faint: '#98A5B6',
++        hairline: '#E5EAF0',
++        surface: '#F6F8FA',
++        surfaceAlt: '#EFF3F7',
++        primary,
++        primaryDark: branding.primaryColorDark || shadeHexColor(primary, 0.5),
++        primarySoft: tintHexColor(primary, 0.93),
++        primaryTint: tintHexColor(primary, 0.78),
++        onPrimary: branding.onPrimaryColor,
++        success: '#0F9D58',
++        warning: '#C2740B',
++        contrastCard: '#0B1220',
++        contrastCardEnd: shadeHexColor(primary, 0.62),
++        onContrast: '#FFFFFF',
++        onContrastMuted: '#C7D2DE',
++    };
++
++    const type: InvoiceTypeScale = {
++        display: 31,
++        title: 20,
++        heading: 13,
++        subheading: 11,
++        label: 8,
++        body: 10,
++        small: 9,
++        micro: 7.8,
++    };
++
++    const metrics: InvoiceMetrics = {
++        pageMargin: 46,
++        headerHeight: 144,
++        compactHeaderHeight: 92,
++        footerHeight: 72,
++        radius: 12,
++        radiusSmall: 8,
++    };
++
++    const color = Object.fromEntries(
++        Object.entries(palette).map(([key, hex]) => [key, hexToPdfColor(hex)])
++    ) as Record<keyof InvoicePalette, ReturnType<typeof rgb>>;
++
++    return { palette, type, metrics, color, fonts: 'helvetica' };
++}
++
++function hexToPdfColor(hex: string) {
++    const clean = hex.replace('#', '');
++    const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean;
++    const r = parseInt(full.slice(0, 2), 16) / 255;
++    const g = parseInt(full.slice(2, 4), 16) / 255;
++    const b = parseInt(full.slice(4, 6), 16) / 255;
++    return rgb(
++        Number.isFinite(r) ? r : 0,
++        Number.isFinite(g) ? g : 0,
++        Number.isFinite(b) ? b : 0
++    );
++}
++
++export { hexToPdfColor };
+diff --git a/lib/invoice/types.ts b/lib/invoice/types.ts
+new file mode 100644
+index 0000000..1bb02fb
+--- /dev/null
++++ b/lib/invoice/types.ts
+@@ -0,0 +1,181 @@
++/**
++ * The invoice document model.
++ *
++ * `lib/invoice.ts` used to render a PDF straight from the raw quote blob,
++ * which made the template impossible to reason about, preview or test. The
++ * renderer now only ever sees an `InvoiceDocument`: a fully normalised,
++ * presentation-ready description of the invoice. Everything that knows about
++ * database columns, quote JSON quirks and settings lives in the model builder.
++ */
++
++export interface InvoiceBranding {
++    /** Public storefront name, e.g. "TEMPNOW". */
++    siteName: string;
++    /** Registered entity name used in the legal footer, e.g. "Tempnow Ltd". */
++    companyName: string;
++    /** Seller postal address lines (optional, shown under the seller block). */
++    companyAddressLines: string[];
++    /** Company registration number text (optional). */
++    companyRegistration: string;
++    /** VAT / tax registration number (optional). */
++    vatNumber: string;
++    supportEmail: string;
++    companyPhone: string;
++    siteUrl: string;
++    /** Logo URL or `/public` relative path (optional). */
++    logoUrl: string;
++    primaryColor: string;
++    primaryColorDark: string;
++    primaryColorSoft: string;
++    /** Readable text colour on top of `primaryColor`. */
++    onPrimaryColor: string;
++    /** ISO currency code, e.g. `GBP`. */
++    currency: string;
++    /** IANA timezone used for date formatting. */
++    timezone: string;
++    /** Tax rate in percent; `0` disables the tax line entirely. */
++    taxRate: number;
++    /** Label for the tax line, e.g. `VAT` or `Insurance Premium Tax`. */
++    taxLabel: string;
++    /** When true the line items already include tax. */
++    taxInclusive: boolean;
++    /** Optional free-text note about tax printed under the totals. */
++    taxNote: string;
++    /** Payment term in days (used for the due date of unpaid invoices). */
++    dueDays: number;
++    /** Terms / refund policy paragraph (optional). */
++    terms: string;
++    /** Small print shown in the footer. */
++    footerNote: string;
++    /** Document title, e.g. `Invoice` or `Tax Invoice`. */
++    documentTitle: string;
++    /** Jurisdiction marker (`uk`, `uae`, ...) used for sensible defaults. */
++    jurisdiction: string;
++}
++
++export interface InvoiceParty {
++    displayName: string;
++    email: string;
++    phone: string;
++    addressLines: string[];
++    /** e.g. customer reference / user id. */
++    reference: string;
++}
++
++export interface InvoiceCover {
++    policyNumber: string;
++    insuranceType: string;
++    vehicle: string;
++    registration: string;
++    vehicleDetail: string;
++    periodStart: string;
++    periodEnd: string;
++    duration: string;
++    reason: string;
++    driver: string;
++    licence: string;
++    modifications: string;
++}
++
++export type InvoiceLineKind = 'charge' | 'discount' | 'tax';
++
++export interface InvoiceLineItem {
++    description: string;
++    /** Small muted lines printed under the description. */
++    details: string[];
++    quantity: number;
++    unitPrice: number;
++    amount: number;
++    kind: InvoiceLineKind;
++}
++
++export interface InvoiceTotals {
++    /** Net subtotal (before tax when tax is added on top). */
++    subtotal: number;
++    discount: number;
++    discountLabel: string;
++    taxAmount: number;
++    taxRate: number;
++    taxLabel: string;
++    /** True when the line items already include tax (tax is informational). */
++    taxInclusive: boolean;
++    /** Amount that is actually payable for this invoice. */
++    total: number;
++    amountPaid: number;
++    balanceDue: number;
++}
++
++export interface InvoicePayment {
++    paid: boolean;
++    /** Human label, e.g. `Card payment (Stripe)`. */
++    methodLabel: string;
++    reference: string;
++    dateText: string;
++    /** Pill text, e.g. `PAID`. */
++    statusLabel: string;
++}
++
++export interface InvoiceNotes {
++    /** Numbered "how to access your documents" steps. */
++    accessSteps: Array<{ title: string; body: string }>;
++    /** "What's included" checklist for the second page. */
++    included: string[];
++    /** Important information bullets (refund policy, digital goods, ...). */
++    important: string[];
++    /** Optional closing message. */
++    thankYou: string;
++}
++
++export interface InvoiceDocument {
++    documentTitle: string;
++    invoiceNumber: string;
++    /** `PAID` / `DUE` watermark; empty string disables it. */
++    watermark: string;
++    issueDateText: string;
++    issueTimeText: string;
++    dueDateText: string;
++    generatedText: string;
++    currency: string;
++    seller: {
++        name: string;
++        addressLines: string[];
++        registration: string;
++        vatNumber: string;
++        email: string;
++        phone: string;
++        website: string;
++    };
++    buyer: InvoiceParty;
++    cover: InvoiceCover;
++    items: InvoiceLineItem[];
++    totals: InvoiceTotals;
++    payment: InvoicePayment;
++    amountInWords: string;
++    taxNote: string;
++    terms: string;
++    footerNote: string;
++    notes: InvoiceNotes;
++}
++
++/** Optional extras callers may pass to `generateInvoicePdf()`. */
++export interface InvoiceOptions {
++    /** ISO currency code; defaults to the `general` settings currency. */
++    currency?: string;
++    /** Payment metadata captured by the checkout / admin flow. */
++    payment?: {
++        paid?: boolean;
++        method?: string | null;
++        reference?: string | null;
++        date?: string | Date | null;
++        status?: string | null;
++        promoCode?: string | null;
++        /** Pre-discount amount (quote `cpw`). */
++        listAmount?: number | null;
++        /** Final charged amount. */
++        amount?: number | null;
++    };
++    /** Overrides for any branding field resolved from settings. */
++    branding?: Partial<InvoiceBranding>;
++    /** Issue date override (defaults to the payment date or `now`). */
++    issuedAt?: string | Date | null;
++}
+diff --git a/package.json b/package.json
+index 2e1a96a..af2ef16 100644
+--- a/package.json
++++ b/package.json
+@@ -9,6 +9,8 @@
+     "start": "next start",
+     "db:generate": "drizzle-kit generate",
+     "db:migrate": "tsx lib/migrate.ts",
++    "invoice:preview": "tsx scripts/preview-invoice.ts",
++    "invoice:verify": "tsx scripts/verify-invoice.ts",
+     "discord:relay-listener": "tsx scripts/discord-relay-listener.ts"
+   },
+   "pnpm": {
+diff --git a/scripts/preview-invoice.ts b/scripts/preview-invoice.ts
+new file mode 100644
+index 0000000..58caa39
+--- /dev/null
++++ b/scripts/preview-invoice.ts
+@@ -0,0 +1,226 @@
++/**
++ * Developer preview for the invoice template.
++ *
++ * Renders a set of realistic invoices straight into `tmp/invoice-preview/`,
++ * so the design can be reviewed (and pinned in a PR) without going through a
++ * checkout. No database needed — pass `--settings` to skip even the settings
++ * read.
++ *
++ * Usage:
++ *   pnpm tsx scripts/preview-invoice.ts            # all samples
++ *   pnpm tsx scripts/preview-invoice.ts paid uae   # only these samples
++ */
++
++import { mkdirSync, writeFileSync } from 'node:fs';
++import path from 'node:path';
++import { generateInvoicePdf } from '../lib/invoice';
++import type { InvoiceOptions } from '../lib/invoice/types';
++
++const OUTPUT_DIR = path.join(process.cwd(), 'tmp', 'invoice-preview');
++
++interface Sample {
++    name: string;
++    description: string;
++    quoteData: Record<string, any>;
++    user: Record<string, any>;
++    policyNumber: string;
++    settings: Record<string, any>;
++    options: InvoiceOptions;
++}
++
++const baseCustomer = {
++    firstName: 'Amelia',
++    middleName: 'Rose',
++    lastName: 'Hughes',
++    dateOfBirth: '14/07/1993',
++    phoneNumber: '+44 7700 900123',
++    occupation: 'Architect',
++    address: '42 Marlborough Crescent, Flat 6',
++    post_code: 'SW1A 1AA',
++    licenseType: 'Full UK License',
++    licenseHeld: '5-10 Years',
++    vehicleValue: '£20,000 - £30,000',
++    reason: 'Borrowing',
++    duration: '1 Day',
++    registration: 'LK23 ZWA',
++    vehicle: { make: 'Audi', model: 'A3 Sportback', year: '2021', engineCC: '1498' },
++};
++
++const baseUser = {
++    userId: 'usr_9f21c4',
++    firstName: 'Amelia',
++    lastName: 'Hughes',
++    email: 'amelia.hughes@example.com',
++    phone: '+44 7700 900123',
++    address: '42 Marlborough Crescent, Flat 6',
++    postCode: 'SW1A 1AA',
++};
++
++const baseQuote = {
++    ...{
++        nameTitle: 'Mrs',
++        total: 24.51,
++        cpw: '32.80',
++        startTime: '18/10/2026 14:00',
++        expiryTime: '19/10/2026 13:59',
++        breakdown: { duration: '1 Day', reason: 'Borrowing' },
++        customerData: baseCustomer,
++        vehicleModifications: ['None'],
++    },
++};
++
++const ukSettings = {
++    siteName: 'Tempnow',
++    companyName: 'Tempnow Ltd',
++    companyRegistration: '12849301',
++    companyAddress: 'Suite 4, 118 Piccadilly, London W1J 7NW',
++    supportEmail: 'support@tempnow.uk',
++    companyPhone: '+44 20 3856 1120',
++    siteDomain: 'tempnow.uk',
++    brandColor: '#0d9488',
++    currency: 'GBP',
++    timezone: 'Europe/London',
++    activeJurisdiction: 'uk',
++    invoiceTaxRate: 0,
++    invoiceDueDays: 7,
++};
++
++const samples: Sample[] = [
++    {
++        name: 'paid',
++        description: 'Settled invoice with promotion code (the common path)',
++        quoteData: { ...baseQuote, promoCode: 'WELCOME10' },
++        user: baseUser,
++        policyNumber: 'P-2427427',
++        settings: ukSettings,
++        options: {
++            payment: {
++                paid: true,
++                method: 'stripe',
++                reference: 'pi_3Qk8sdK2eZvKYlo2C1x9QpRt',
++                date: '2026-10-08T11:32:00.000Z',
++                status: 'paid',
++                promoCode: 'WELCOME10',
++                listAmount: 32.8,
++                amount: 24.51,
++            },
++        },
++    },
++    {
++        name: 'unpaid',
++        description: 'Invoice awaiting payment, with a due date',
++        quoteData: { ...baseQuote, total: 41.2, cpw: '41.20', promoCode: '' },
++        user: { ...baseUser, firstName: 'Daniel', lastName: 'Okonkwo', email: 'daniel.okonkwo@example.com' },
++        policyNumber: 'P-500679399',
++        settings: ukSettings,
++        options: {
++            payment: { paid: false, status: 'pending', method: 'bank_transfer' },
++        },
++    },
++    {
++        name: 'tax',
++        description: 'Tax invoice: 5% VAT added on top of the premium',
++        quoteData: { ...baseQuote, total: 157.5 },
++        user: { ...baseUser, firstName: 'Fatima', lastName: 'Al Mansoori', email: 'fatima.almansoori@example.com' },
++        policyNumber: 'P-7712045',
++        settings: {
++            siteName: 'Tempnow UAE',
++            companyName: 'Tempnow Insurance Brokers LLC',
++            companyRegistration: 'DED 889201',
++            companyAddress: 'Office 1204, Business Bay Tower, Dubai, UAE',
++            supportEmail: 'support@tempnow.ae',
++            siteDomain: 'tempnow.ae',
++            brandColor: '#c8a24a',
++            currency: 'AED',
++            timezone: 'Asia/Dubai',
++            activeJurisdiction: 'uae',
++            trn: '100298471500003',
++            invoiceTaxRate: 5,
++            invoiceTaxLabel: 'VAT',
++            invoiceDueDays: 14,
++        },
++        options: {
++            payment: {
++                paid: true,
++                method: 'airwallex',
++                reference: 'awx_8842ff10',
++                date: '2026-10-07T06:15:00.000Z',
++                status: 'completed',
++                listAmount: 177.5,
++                amount: 157.5,
++            },
++        },
++    },
++    {
++        name: 'edge',
++        description: 'Long values, unicode name, no email — robustness sample',
++        quoteData: {
++            ...baseQuote,
++            nameTitle: 'Prof',
++            total: 1212.05,
++            cpw: '1400',
++            startTime: '01/12/2026 09:30',
++            expiryTime: '31/12/2026 09:29',
++            promoCode: 'FLEET2026',
++            customerData: {
++                ...baseCustomer,
++                firstName: 'Zoë',
++                middleName: '',
++                lastName: 'Wiśniewska-Łącka',
++                address: 'Apartment 12B, Riverside Wharf, 245 Upper Thames Street, Long Address District',
++                post_code: 'EC4V 3PH',
++                vehicle: { make: 'Mercedes-Benz', model: 'Sprinter 315 CDI Premium Plus', year: '2023', engineCC: '1950' },
++                registration: 'BJ72 KLM',
++                reason: 'Buying/Selling/Testing',
++                duration: '30 Days',
++            },
++            vehicleModifications: ['Roof rack', 'Tow bar', 'Company livery wrap'],
++        },
++        user: baseUser,
++        policyNumber: 'P-0000001',
++        settings: { ...ukSettings, invoiceTaxRate: 12, invoiceTaxInclusive: true, invoiceTaxLabel: 'Insurance Premium Tax' },
++        options: {
++            payment: {
++                paid: true,
++                method: 'square',
++                reference: 'sq_pay_9f2h4k',
++                date: '2026-10-01T08:05:00.000Z',
++                status: 'completed',
++                promoCode: 'FLEET2026',
++                listAmount: 1400,
++                amount: 1212.05,
++            },
++        },
++    },
++];
++
++async function main() {
++    const requested = process.argv.slice(2).filter((arg) => !arg.startsWith('-'));
++    const selected = requested.length
++        ? samples.filter((sample) => requested.includes(sample.name))
++        : samples;
++
++    mkdirSync(OUTPUT_DIR, { recursive: true });
++
++    for (const sample of selected) {
++        const bytes = await generateInvoicePdf(
++            sample.quoteData,
++            sample.user,
++            sample.policyNumber,
++            {
++                generalSettings: sample.settings,
++                options: sample.options,
++            }
++        );
++
++        const file = path.join(OUTPUT_DIR, `invoice-${sample.name}.pdf`);
++        writeFileSync(file, bytes);
++        console.log(`✓ ${sample.name.padEnd(7)} ${(bytes.byteLength / 1024).toFixed(1)} KB  ${sample.description}`);
++        console.log(`  ${file}`);
++    }
++}
++
++main().catch((error) => {
++    console.error(error);
++    process.exit(1);
++});
+diff --git a/scripts/verify-invoice.ts b/scripts/verify-invoice.ts
+new file mode 100644
+index 0000000..c605cf1
+--- /dev/null
++++ b/scripts/verify-invoice.ts
+@@ -0,0 +1,343 @@
++/**
++ * Invoice template checks.
++ *
++ * Run with `pnpm tsx scripts/verify-invoice.ts`. Renders a set of adversarial
++ * quotes through the real generator and asserts the properties that matter for
++ * a billing document:
++ *
++ *   1. generation never throws — no `UnsupportedEncodingError` from emoji or
++ *      non-Latin names, no crash on missing customer data or empty quotes
++ *   2. the printed arithmetic balances: subtotal - discount + tax = total
++ *   3. paid invoices have a zero balance, unpaid ones a positive one
++ *   4. typical invoices are two pages (invoice + information), never more
++ *   5. money, dates and amount-in-words helpers behave
++ */
++
++import { PDFDocument } from 'pdf-lib';
++import { buildInvoiceDocument } from '../lib/invoice/model';
++import { buildInvoiceBranding } from '../lib/invoice/branding';
++import { renderInvoicePdf } from '../lib/invoice/render';
++import {
++    amountInWords,
++    formatCoverDate,
++    formatDate,
++    formatMoney,
++    parseAmount,
++    safeText,
++    wrapText,
++    truncate,
++} from '../lib/invoice/format';
++import { createInvoiceTheme } from '../lib/invoice/theme';
++import type { InvoiceOptions } from '../lib/invoice/types';
++
++let failures = 0;
++let checks = 0;
++
++function check(name: string, condition: boolean, detail = '') {
++    checks += 1;
++    if (condition) {
++        console.log(`  ok   ${name}`);
++    } else {
++        failures += 1;
++        console.error(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`);
++    }
++}
++
++function closeTo(a: number, b: number, epsilon = 0.011): boolean {
++    return Math.abs(a - b) <= epsilon;
++}
++
++const settings = {
++    siteName: 'Tempnow',
++    companyName: 'Tempnow Ltd',
++    companyRegistration: '12849301',
++    companyAddress: 'Suite 4, 118 Piccadilly, London W1J 7NW',
++    supportEmail: 'support@tempnow.uk',
++    siteDomain: 'tempnow.uk',
++    brandColor: '#0d9488',
++    currency: 'GBP',
++    timezone: 'Europe/London',
++    invoiceTaxRate: 12,
++    invoiceTaxLabel: 'Insurance Premium Tax',
++    invoiceDueDays: 7,
++};
++
++const baseQuote = {
++    nameTitle: 'Mrs',
++    total: 24.51,
++    cpw: '32.80',
++    startTime: '18/10/2026 14:00',
++    expiryTime: '19/10/2026 13:59',
++    customerData: {
++        firstName: 'Amelia',
++        lastName: 'Hughes',
++        address: '42 Marlborough Crescent',
++        post_code: 'SW1A 1AA',
++        phoneNumber: '+44 7700 900123',
++        licenseType: 'Full UK License',
++        licenseHeld: '5-10 Years',
++        reason: 'Borrowing',
++        duration: '1 Day',
++        registration: 'LK23 ZWA',
++        vehicle: { make: 'Audi', model: 'A3', year: '2021', engineCC: '1498' },
++    },
++};
++
++const user = {
++    userId: 'usr_1',
++    firstName: 'Amelia',
++    lastName: 'Hughes',
++    email: 'amelia@example.com',
++};
++
++interface Case {
++    name: string;
++    quoteData: any;
++    user: any;
++    options?: InvoiceOptions;
++    pages: 'two' | 'atLeastTwo';
++}
++
++const cases: Case[] = [
++    {
++        name: 'standard paid invoice',
++        quoteData: { ...baseQuote, promoCode: 'WELCOME10' },
++        user,
++        options: {
++            payment: {
++                paid: true,
++                method: 'stripe',
++                reference: 'pi_123',
++                date: '2026-10-08T11:32:00.000Z',
++                promoCode: 'WELCOME10',
++                listAmount: 32.8,
++                amount: 24.51,
++            },
++        },
++        pages: 'two',
++    },
++    {
++        name: 'unpaid invoice',
++        quoteData: baseQuote,
++        user,
++        options: { payment: { paid: false, status: 'pending' } },
++        pages: 'two',
++    },
++    {
++        name: 'emoji + cyrillic + em dash in every field',
++        quoteData: {
++            ...baseQuote,
++            nameTitle: 'Mr 🚗',
++            promoCode: 'ПРОМО',
++            customerData: {
++                ...baseQuote.customerData,
++                firstName: 'Ivan 💥 Petrov',
++                lastName: 'Смирнов',
++                address: 'Улица Ленина 15 — “квартира” 3 ’',
++                vehicle: { make: 'Лада', model: 'Веста 🚙', year: '2022', engineCC: '1596' },
++            },
++        },
++        user: { ...user, email: 'иван@пример.рф' },
++        options: { payment: { paid: true, method: 'stripe', amount: 24.51 } },
++        pages: 'two',
++    },
++    {
++        name: 'missing customer data / empty user',
++        quoteData: { total: 10, customerData: {} },
++        user: {},
++        options: {},
++        pages: 'two',
++    },
++    {
++        name: 'empty quote',
++        quoteData: {},
++        user: null,
++        options: {},
++        pages: 'two',
++    },
++    {
++        name: 'extreme amounts and long strings',
++        quoteData: {
++            ...baseQuote,
++            total: 9876543.21,
++            cpw: '9876543.21',
++            startTime: 'not-a-date',
++            promoCode: 'X'.repeat(80),
++            customerData: {
++                ...baseQuote.customerData,
++                address: 'A'.repeat(400),
++                vehicle: { make: 'Mercedes-Benz '.repeat(6), model: 'Sprinter', year: '2023', engineCC: '1950' },
++            },
++        },
++        user,
++        options: {
++            payment: {
++                paid: true,
++                method: 'airwallex',
++                reference: 'r'.repeat(120),
++                listAmount: 9876543.21,
++                amount: 9876543.21,
++            },
++        },
++        pages: 'two',
++    },
++    {
++        name: 'many line items (tax + discount)',
++        quoteData: {
++            ...baseQuote,
++            total: 1000,
++            cpw: '1500',
++            promoCode: 'FLEET',
++            startTime: '01/12/2026 09:30',
++            expiryTime: '31/12/2026 09:29',
++        },
++        user,
++        options: {
++            payment: {
++                paid: true,
++                method: 'square',
++                promoCode: 'FLEET',
++                listAmount: 1500,
++                amount: 1000,
++            },
++        },
++        pages: 'atLeastTwo',
++    },
++];
++
++async function renderCase(testCase: Case) {
++    const branding = buildInvoiceBranding(settings);
++    const document = buildInvoiceDocument({
++        quoteData: testCase.quoteData,
++        user: testCase.user,
++        policyNumber: 'P-2427427',
++        branding,
++        options: testCase.options,
++    });
++
++    const pdf = await PDFDocument.create();
++    await renderInvoicePdf(pdf, { document, branding, logo: null });
++    const bytes = await pdf.save();
++
++    return { document, pdf, bytes };
++}
++
++async function main() {
++    console.log('\nInvoice helper sanity');
++    check('safeText strips emoji', safeText('Hello 🚗 world') === 'Hello world');
++    check('safeText keeps CP1252 punctuation', safeText('“quoted” — dash') === '“quoted” — dash');
++    check('parseAmount handles currency strings', parseAmount('£1,234.50') === 1234.5);
++    check('parseAmount handles junk', parseAmount('n/a') === null);
++    check('formatMoney formats GBP', formatMoney(1234.5, 'GBP') === '£1,234.50', formatMoney(1234.5, 'GBP'));
++    check('formatMoney prefixes ISO codes for AED', formatMoney(10, 'AED') === 'AED 10.00');
++    check('amountInWords basic', amountInWords(24.51, 'GBP') === 'Twenty-four pounds and fifty-one pence only', amountInWords(24.51, 'GBP'));
++    check('amountInWords thousands', amountInWords(1212.05, 'GBP').startsWith('One thousand two hundred and twelve pounds'), amountInWords(1212.05, 'GBP'));
++    check('amountInWords AED', amountInWords(157.5, 'AED').includes('dirhams'), amountInWords(157.5, 'AED'));
++    check('formatCoverDate handles DD/MM/YY HH:MM', formatCoverDate('18/10/26 14:00') === '18 Oct 2026, 14:00', formatCoverDate('18/10/26 14:00'));
++    check('formatDate ignores invalid input', formatDate('nonsense') === '');
++    check('formatDate formats ISO in timezone', formatDate('2026-10-08T23:30:00.000Z', 'Europe/London') === '09 Oct 2026', formatDate('2026-10-08T23:30:00.000Z', 'Europe/London'));
++    check(
++        'truncate shortens to the available width',
++        truncate('a very long company name that will not fit', createFontStub(), 9, 60).endsWith('...')
++    );
++    check(
++        'truncate leaves short text alone',
++        truncate('short', createFontStub(), 9, 200) === 'short'
++    );
++    check(
++        'wrapText respects the column width',
++        wrapText('one two three four five six seven eight nine', createFontStub(), 10, 60)
++            .every((line) => line.length * 10 * 0.5 <= 60 + 0.001)
++    );
++    check(
++        'wrapText keeps every word',
++        wrapText('alpha beta gamma', createFontStub(), 10, 40).join(' ') === 'alpha beta gamma'
++    );
++
++    console.log('\nDeterministic totals');
++    {
++        const branding = buildInvoiceBranding(settings);
++        const document = buildInvoiceDocument({
++            quoteData: { ...baseQuote, promoCode: 'WELCOME10' },
++            user,
++            policyNumber: 'P-1',
++            branding,
++            options: { payment: { listAmount: 32.8, amount: 24.51, promoCode: 'WELCOME10', paid: true, method: 'stripe' } },
++        });
++        const t = document.totals;
++        check('subtotal - discount + tax = total', closeTo(t.subtotal - t.discount + t.taxAmount, t.total),
++            `${t.subtotal} - ${t.discount} + ${t.taxAmount} != ${t.total}`);
++        check('paid invoice has zero balance', t.balanceDue === 0);
++        check('paid invoice records the payment', t.amountPaid === t.total);
++        check('promotion is labelled with the code', t.discountLabel.includes('WELCOME10'));
++        check('tax-exclusive invoice: tax is added on top of the net', !t.taxInclusive && closeTo(t.subtotal - t.discount + t.taxAmount, t.total));
++        check('line items sum to the total', closeTo(
++            document.items.reduce((sum, item) => sum + item.amount, 0),
++            t.total),
++            document.items.map((item) => item.amount).join(' + '));
++    }
++
++    console.log('\nTax-inclusive invoices');
++    {
++        const inclusiveBranding = buildInvoiceBranding({ ...settings, invoiceTaxInclusive: true });
++        const document = buildInvoiceDocument({
++            quoteData: { ...baseQuote, total: 1212.05 },
++            user,
++            policyNumber: 'P-2',
++            branding: inclusiveBranding,
++            options: { payment: { listAmount: 1400, amount: 1212.05, paid: true, method: 'stripe' } },
++        });
++        const t = document.totals;
++
++        check('inclusive tax does not change the amount charged', closeTo(t.total, 1212.05), String(t.total));
++        check('inclusive tax is shown as a breakdown, not an extra', closeTo(t.subtotal - t.discount, t.total),
++            `${t.subtotal} - ${t.discount} != ${t.total}`);
++        check('inclusive tax line is flagged', t.taxInclusive && t.taxAmount > 0);
++        check('inclusive tax is not added as a separate line item',
++            document.items.every((item) => item.kind !== 'tax'));
++    }
++
++    console.log('\nRendering (no exceptions, correct page counts)');
++    for (const testCase of cases) {
++        try {
++            const { bytes, pdf, document } = await renderCase(testCase);
++            const pages = pdf.getPages().length;
++            check(`${testCase.name}: renders`, bytes.byteLength > 4000, `${bytes.byteLength} bytes`);
++            check(
++                `${testCase.name}: ${testCase.pages === 'two' ? 'exactly 2' : 'at least 2'} pages`,
++                testCase.pages === 'two' ? pages === 2 : pages >= 2,
++                `${pages} pages`
++            );
++            check(`${testCase.name}: balance due is never negative`, document.totals.balanceDue >= 0);
++            check(`${testCase.name}: currency resolved`, /^[A-Z]{3}$/.test(document.currency));
++        } catch (error) {
++            failures += 1;
++            checks += 1;
++            console.error(`  FAIL ${testCase.name}: threw ${(error as Error).message}`);
++        }
++    }
++
++    console.log('\nTheme');
++    {
++        const theme = createInvoiceTheme(buildInvoiceBranding({ brandColor: '#c8a24a' }));
++        check('brand colour flows into the palette', theme.palette.primary === '#c8a24a');
++        check('contrast text follows the luminance rule (dark brand → white)', theme.palette.onPrimary === '#ffffff');
++        const lightTheme = createInvoiceTheme(buildInvoiceBranding({ brandColor: '#ffe066' }));
++        check('contrast text follows the luminance rule (light brand → ink)', lightTheme.palette.onPrimary === '#0f172a');
++    }
++
++    console.log(`\n${checks - failures}/${checks} checks passed`);
++    if (failures > 0) process.exit(1);
++}
++
++/** Minimal stand-in for a pdf-lib font, used by the pure-text checks. */
++function createFontStub() {
++    return {
++        widthOfTextAtSize: (text: string, size: number) => text.length * size * 0.5,
++    } as any;
++}
++
++main().catch((error) => {
++    console.error(error);
++    process.exit(1);
++});

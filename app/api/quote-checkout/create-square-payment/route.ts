@@ -183,9 +183,11 @@ export async function POST(req: NextRequest) {
     });
     let siteName = "";
     let currency = "GBP"; // Default currency
+    let parsedGeneralSettings: Record<string, any> | null = null;
     if (generalSettings && generalSettings.value) {
       const rawGenValue = generalSettings.value;
       const parsedSettings = typeof rawGenValue === 'string' ? JSON.parse(rawGenValue) : rawGenValue;
+      parsedGeneralSettings = parsedSettings;
       siteName = parsedSettings.siteName || "TEMPNOW";
       currency = parsedSettings.currency || "GBP";
     }
@@ -231,8 +233,27 @@ export async function POST(req: NextRequest) {
       const effectivePrice = (quote.updatePrice && quote.updatePrice !== 'false') ? quote.updatePrice : quote.cpw;
       const finalAmount = parseFloat(effectivePrice || quoteData.total);
 
-      // Generate invoice
-      const pdfBytes = await generateInvoicePdf({ ...quoteData, total: finalAmount, paymentDate: quote.paymentDate }, user, quote.policyNumber, siteName);
+      // Generate invoice — paid in full with the Square payment id.
+      const pdfBytes = await generateInvoicePdf(
+        { ...quoteData, total: finalAmount, paymentDate: quote.paymentDate },
+        user,
+        quote.policyNumber,
+        {
+          siteName,
+          currency,
+          generalSettings: parsedGeneralSettings,
+          payment: {
+            paid: true,
+            status: 'paid',
+            method: 'square',
+            reference: paymentResult.payment.id,
+            date: quote.paymentDate,
+            promoCode: quoteData.promoCode,
+            listAmount: parseFloat(quote.cpw || '') || null,
+            amount: finalAmount,
+          },
+        }
+      );
 
       // Send confirmation email
       const vehicle = quoteData.customerData.vehicle;

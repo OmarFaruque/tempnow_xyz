@@ -9,6 +9,8 @@
     "start": "next start",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx lib/migrate.ts",
+    "invoice:preview": "tsx scripts/preview-invoice.ts",
+    "invoice:verify": "tsx scripts/verify-invoice.ts",
     "discord:relay-listener": "tsx scripts/discord-relay-listener.ts"
   },
   "pnpm": {

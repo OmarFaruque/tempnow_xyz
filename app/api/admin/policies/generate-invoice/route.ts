@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { quotes, users, settings } from '@/lib/schema';
 import { eq } from 'drizzle-orm';
-import { generateInvoicePdf } from '@/lib/invoice';
+import { generateInvoicePdf, isInvoicePaid } from '@/lib/invoice';
 
 export async function POST(req: NextRequest) {
   try {
@@ -34,16 +34,34 @@ export async function POST(req: NextRequest) {
 
     const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
     let siteName = "Tempnow";
+    let general: Record<string, any> | null = null;
     if (generalSettings && generalSettings.value) {
-        const parsedSettings = JSON.parse(generalSettings.value as string);
-        siteName = parsedSettings.siteName || "Tempnow";
+        general = typeof generalSettings.value === 'string'
+            ? JSON.parse(generalSettings.value as string)
+            : (generalSettings.value as Record<string, any>);
+        siteName = general?.siteName || "Tempnow";
     }
 
-    // 3. Generate the invoice PDF
-    const pdfBytes = await generateInvoicePdf(quoteData, user, policyNumber, siteName);
+    // 3. Generate the invoice PDF. Payment metadata drives the PAID stamp and
+    //    the payment summary, and the settings row provides branding, currency
+    //    and any configured tax/VAT details.
+    const pdfBytes = await generateInvoicePdf(quoteData, user, policyNumber, {
+      siteName,
+      generalSettings: general,
+      payment: {
+        paid: isInvoicePaid(quote.paymentStatus) || isInvoicePaid(quote.status),
+        status: quote.paymentStatus || quote.status,
+        method: quote.paymentMethod,
+        reference: quote.paymentIntentId || quote.spaymentId,
+        date: quote.paymentDate,
+        promoCode: quote.promoCode,
+        listAmount: parseFloat(quote.cpw || '') || null,
+        amount: finalAmount,
+      },
+    });
 
     // 4. Return the PDF as a response
-    return new NextResponse(pdfBytes, {
+    return new NextResponse(Buffer.from(pdfBytes), {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',
