@@ -368,12 +368,13 @@ export async function sendExistingTicketEmail({
   const header = "Open Ticket Notification";
   const ticketUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/ticket/${ticketToken}`;
 
+  const P = `style="margin:0 0 16px; padding:0; color:#334155; font-size:15px; line-height:1.75; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;"`
   const content = `
-     <p>Hello ${escapeHtml(name)},</p>
-    <p>You are receiving this email because you tried to open a new support ticket, but you already have an open ticket with us.</p>
-    <p>Please check the status of your existing ticket or add a new reply using the button below.</p>
+    <p ${P}>Hello ${escapeHtml(name)},</p>
+    <p ${P}>You are receiving this email because you tried to open a new support ticket, but you already have an open ticket with us.</p>
+    <p ${P}>Please check the status of your existing ticket or add a new reply using the button below.</p>
     ${buildCtaButton(ticketUrl, "View Your Open Ticket", branding, { icon: "&#127915;" })}
-    <p>Submitting a new ticket is not necessary. We will respond to your existing ticket as soon as possible.</p>
+    <p ${P}>Submitting a new ticket is not necessary. We will respond to your existing ticket as soon as possible.</p>
   `;
   const footer = "Thank you for your patience.";
 
@@ -594,11 +595,12 @@ export async function createCustomerReplyEmail({
 
   const subject = `New Customer Reply on Ticket #${ticketId}: ${ticketSubject}`;
   const header = `Ticket Reply: #${ticketId}`;
+  const P = `style="margin:0 0 16px; padding:0; color:#334155; font-size:15px; line-height:1.75; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;"`
   const content = `
-   <p>A customer has replied to ticket #${escapeHtml(ticketId)} (${escapeHtml(ticketSubject)}).</p>
-    <p><strong>Customer:</strong> ${escapeHtml(customerName)}</p>
-    <p><strong>Message:</strong></p>
-     ${buildMessageCard(escapeHtml(message).replace(/\n/g, '<br>'), branding)}
+    <p ${P}>A customer has replied to ticket #${escapeHtml(ticketId)} (${escapeHtml(ticketSubject)}).</p>
+    <p ${P}><strong style="color:#0f172a;">Customer:</strong> ${escapeHtml(customerName)}</p>
+    <p ${P}><strong style="color:#0f172a;">Message:</strong></p>
+    ${buildMessageCard(escapeHtml(message).replace(/\n/g, '<br>'), branding)}
     ${buildCtaButton(ticketUrl, "View Ticket", branding, { icon: "&#127915;" })}
   `;
   const footer = `This is an automated notification. Please do not reply directly to this email.`;

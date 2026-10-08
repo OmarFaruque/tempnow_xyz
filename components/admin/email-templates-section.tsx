@@ -264,6 +264,100 @@ export function EmailTemplatesSection() {
     })
   }
 
+  const renderFullEmailPreview = (key: keyof typeof templates) => {
+    const rawTemplate = templates[key]
+    if (!rawTemplate) return ""
+
+    const rawSubject = replaceVariables(rawTemplate.subject)
+    const rawContent = replaceVariables(rawTemplate.content)
+
+    // Build HTML content from plain-text template
+    const lines = rawContent.split("\n")
+    let html = ""
+    let listItems: string[] = []
+
+    const flushList = () => {
+      if (listItems.length > 0) {
+        html += `<ul style="margin:0 0 16px; padding:0 0 0 24px; list-style:disc;">${listItems.map(i => `<li style="color:#334155; font-size:15px; line-height:1.75; margin:0 0 6px;">${i}</li>`).join("")}</ul>`
+        listItems = []
+      }
+    }
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (line === "") {
+        flushList()
+        continue
+      }
+      const bullet = /^[-•*]\s+(.+)$/.exec(line)
+      if (bullet) {
+        listItems.push(bullet[1])
+        continue
+      }
+      flushList()
+      // Section label (ends with colon, short)
+      if (/^[^<>]{1,60}:$/.test(line)) {
+        html += `<p style="margin:20px 0 8px; font-size:13px; font-weight:700; color:#0f172a; text-transform:uppercase; letter-spacing:0.05em;">${line}</p>`
+      } else {
+        html += `<p style="margin:0 0 16px; color:#334155; font-size:15px; line-height:1.75;">${line}</p>`
+      }
+    }
+    flushList()
+
+    // For verification code template, render a styled code box
+    let contentHtml = html
+    if (key === "verificationCode") {
+      contentHtml = contentHtml.replace(
+        new RegExp(`<p[^>]*>${sampleData.code}</p>`),
+        `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0; text-align:center;">
+          <tr><td align="center" style="padding:0 0 8px; font-size:11px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:#0f766e;">Your verification code</td></tr>
+          <tr><td align="center" style="background:#f8fafc; border:1px solid #e2e8f0; border-top:3px solid #0d9488; border-radius:12px; padding:16px 28px;">
+            <span style="font-family:'Courier New',monospace; font-size:30px; font-weight:700; letter-spacing:6px; color:#0f172a;">${sampleData.code}</span>
+          </td></tr>
+        </table>`
+      )
+    }
+
+    const year = new Date().getFullYear()
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+* { box-sizing:border-box; }
+body { margin:0; padding:24px 12px; background-color:#f3f6f8; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
+</style>
+</head>
+<body>
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:580px; margin:0 auto; background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.04);">
+  <tr>
+    <td style="background:#f0fdfa; padding:28px 32px 22px; border-top:4px solid #0d9488; border-bottom:1px solid #ccfbf1;">
+      <div style="font-size:17px; font-weight:700; color:#0f172a; letter-spacing:-0.01em;">TEMPNOW</div>
+      <h1 style="margin:14px 0 0; font-size:22px; font-weight:700; color:#0f172a; line-height:1.3;">${rawSubject}</h1>
+    </td>
+  </tr>
+  <tr>
+    <td style="background:#ffffff; padding:28px 32px 32px; text-align:left;">
+      ${contentHtml}
+    </td>
+  </tr>
+  <tr>
+    <td style="background:#0f172a; padding:24px 32px; border-top:1px solid #1e293b; text-align:left;">
+      <div style="font-size:13px; font-weight:700; color:#ffffff; letter-spacing:0.06em; text-transform:uppercase;">TEMPNOW</div>
+      <div style="margin-top:6px; font-size:12px; color:#94a3b8; line-height:1.7;">
+        Churchill Digital &middot; Support: support@tempnow.xyz &middot; tempnow.xyz
+      </div>
+      <div style="margin-top:4px; font-size:11px; color:#64748b;">If you did not request this, please ignore this email.</div>
+      <div style="margin-top:10px; font-size:11px; color:#475569;">&copy; ${year} Churchill Digital - FZCO. All rights reserved.</div>
+    </td>
+  </tr>
+</table>
+</body>
+</html>`
+  }
+
   const handleSave = async () => {
     try {
       // In a real app, save to database or API
@@ -550,8 +644,12 @@ export function EmailTemplatesSection() {
                       className="min-h-[300px] font-mono text-sm"
                     />
                   ) : (
-                    <div className="border rounded-md p-4 min-h-[300px] bg-white whitespace-pre-wrap">
-                      {replaceVariables(templates[templateKey as keyof typeof templates].content)}
+                    <div className="border rounded-xl overflow-hidden bg-slate-100 p-4 min-h-[450px] flex justify-center">
+                      <iframe
+                        title="Email Preview"
+                        className="w-full max-w-[640px] h-[550px] border-0 rounded-lg shadow-sm bg-white"
+                        srcDoc={renderFullEmailPreview(templateKey as keyof typeof templates)}
+                      />
                     </div>
                   )}
                 </div>

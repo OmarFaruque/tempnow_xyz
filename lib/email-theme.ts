@@ -186,9 +186,14 @@ export function enhanceEmailContent(rawContent: string): string {
     const parts: string[] = []
     let listItems: string[] = []
 
+    const P_STYLE = `style="margin:0 0 16px; padding:0; color:#334155; font-size:15px; line-height:1.75; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;"`
+    const LABEL_STYLE = `style="margin:20px 0 8px; padding:0; color:#0f172a; font-size:13px; font-weight:700; line-height:1.4; text-transform:uppercase; letter-spacing:0.05em; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;"`
+    const UL_STYLE = `style="margin:0 0 16px; padding:0 0 0 24px; list-style-type:disc;"`
+    const LI_STYLE = `style="margin:0 0 8px; padding:0; color:#334155; font-size:15px; line-height:1.75; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;"`
+
     const flushList = () => {
         if (listItems.length > 0) {
-            parts.push(`<ul class="email-list">${listItems.map((item) => `<li>${item}</li>`).join("")}</ul>`)
+            parts.push(`<ul class="email-list" ${UL_STYLE}>${listItems.map((item) => `<li ${LI_STYLE}>${item}</li>`).join("")}</ul>`)
             listItems = []
         }
     }
@@ -211,9 +216,9 @@ export function enhanceEmailContent(rawContent: string): string {
         }
         flushList()
         if (/^[^<>]{1,60}:$/.test(line)) {
-            parts.push(`<p class="email-section-label">${line}</p>`)
+            parts.push(`<p class="email-section-label" ${LABEL_STYLE}>${line}</p>`)
         } else {
-            parts.push(`<p>${line}</p>`)
+            parts.push(`<p ${P_STYLE}>${line}</p>`)
         }
     }
     flushList()
@@ -241,14 +246,20 @@ export function buildCtaButton(
     return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${align}" class="email-cta-table" style="margin:24px ${align === "center" ? "auto" : "0"};"><tr><td align="center" class="email-cta-cell" bgcolor="${branding.primaryColor}" style="background-color:${branding.primaryColor}; background-image:linear-gradient(135deg, ${branding.primaryColor} 0%, ${branding.primaryColorDark} 100%); border-radius:12px;"><a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" class="email-cta" style="display:inline-block; padding:14px 30px; font-family:${branding.fontStack}; font-size:16px; line-height:20px; font-weight:600; letter-spacing:0.2px; color:${branding.onPrimaryColor}; text-decoration:none; border-radius:12px;">${iconHtml}<span style="vertical-align:middle;">${escapeHtml(label)}</span></a></td></tr></table>`
 }
 
-/** One-time-passcode box with brand-tinted background. */
+/** Prominent, accessible one-time-passcode panel with a clear label. */
 export function buildCodeBox(code: string, branding: EmailBranding): string {
-    return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:24px auto;"><tr><td align="center" bgcolor="${branding.primaryColorSoft}" style="background-color:${branding.primaryColorSoft}; border:1px solid ${tintHexColor(branding.primaryColor, 0.65)}; border-radius:14px; padding:18px 34px;"><span style="font-family:'Courier New', Courier, monospace; font-size:30px; font-weight:700; letter-spacing:8px; color:${shadeHexColor(branding.primaryColor, 0.35)};">${escapeHtml(code)}</span></td></tr></table>`
+    return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%; margin:28px 0;">
+<tr><td align="center" style="padding:0 8px;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;">
+<tr><td align="center" style="padding:0 0 10px; font-family:${branding.fontStack}; font-size:11px; line-height:16px; font-weight:700; letter-spacing:1.6px; text-transform:uppercase; color:${shadeHexColor(branding.primaryColor, 0.28)};">Your verification code</td></tr>
+<tr><td align="center" bgcolor="#f7f9fa" style="background-color:#f7f9fa; border:1px solid #e5eaf0; border-top:3px solid ${branding.primaryColor}; border-radius:12px; padding:18px 30px;">
+<span style="font-family:'Courier New', Courier, monospace; font-size:30px; line-height:1.3; font-weight:700; letter-spacing:6px; color:#183143; white-space:nowrap;">${escapeHtml(code)}</span>
+</td></tr></table></td></tr></table>`
 }
 
 /** Quoted message card (ticket replies, customer messages). */
 export function buildMessageCard(innerHtml: string, branding: EmailBranding): string {
-    return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0;"><tr><td bgcolor="${branding.primaryColorSoft}" style="background-color:${branding.primaryColorSoft}; border-left:4px solid ${branding.primaryColor}; border-radius:0 12px 12px 0; padding:18px 22px; font-size:15px; line-height:1.75; color:#334155;">${innerHtml}</td></tr></table>`
+    return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0;"><tr><td bgcolor="${branding.primaryColorSoft}" style="background-color:${branding.primaryColorSoft}; border-left:4px solid ${branding.primaryColor}; border-radius:0 12px 12px 0; padding:18px 22px; font-size:15px; line-height:1.75; color:#334155; margin-top:20px;">${innerHtml}</td></tr></table>`
 }
 
 /* ------------------------------------------------------------------------ */
@@ -286,12 +297,14 @@ export function buildEmailShell(options: EmailShellOptions): string {
     const companyName = escapeHtml(branding.companyName)
     const { primaryColor, primaryColorDark, primaryColorSoft, onPrimaryColor, fontStack } = branding
 
-    const pageBg = tintHexColor(primaryColor, 0.93)
-    const cardBorder = tintHexColor(primaryColor, 0.78)
+    // Keep the canvas calm and neutral so the brand color is an accent, not a
+    // wall of color. This also remains readable in clients that strip CSS.
+    const pageBg = "#f3f6f8"
+    const cardBorder = "#e5eaf0"
 
     const logoBlock = branding.logoUrl
         ? `<img src="${escapeHtml(branding.logoUrl)}" alt="${siteName}" width="140" style="display:block; max-width:140px; width:100%; height:auto; border:0; outline:none; text-decoration:none; border-radius:8px;">`
-        : `<div style="font-family:${fontStack}; font-size:20px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; color:#ffffff;">${siteName}</div>`
+        : `<div style="font-family:${fontStack}; font-size:18px; font-weight:700; letter-spacing:-0.02em; color:#183143;">${siteName}</div>`
 
     const footerMetaParts: string[] = []
     if (branding.companyRegistration) {
@@ -299,18 +312,18 @@ export function buildEmailShell(options: EmailShellOptions): string {
     }
     if (branding.supportEmail) {
         footerMetaParts.push(
-            `Support: <a href="mailto:${escapeHtml(branding.supportEmail)}" style="color:#e2e8f0; text-decoration:underline;">${escapeHtml(branding.supportEmail)}</a>`
+            `Support: <a href="mailto:${escapeHtml(branding.supportEmail)}" style="color:#526b7a; text-decoration:underline;">${escapeHtml(branding.supportEmail)}</a>`
         )
     }
     if (branding.siteUrl) {
         footerMetaParts.push(
-            `<a href="${escapeHtml(branding.siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:#e2e8f0; text-decoration:underline;">${escapeHtml(branding.siteUrl.replace(/^https?:\/\//i, ""))}</a>`
+            `<a href="${escapeHtml(branding.siteUrl)}" target="_blank" rel="noopener noreferrer" style="color:#526b7a; text-decoration:underline;">${escapeHtml(branding.siteUrl.replace(/^https?:\/\//i, ""))}</a>`
         )
     }
 
     const customFooter = (footer || "").trim()
     const customFooterBlock = customFooter
-        ? `<div style="margin-top:18px; padding-top:18px; border-top:1px solid rgba(255,255,255,0.14); font-size:13px; line-height:1.8; color:#cbd5e1;">${customFooter.replace(/\n/g, "<br>")}</div>`
+        ? `<div style="margin-top:18px; padding-top:18px; border-top:1px solid #e2e8ec; font-size:13px; line-height:1.8; color:#526573;">${customFooter.replace(/\n/g, "<br>")}</div>`
         : ""
 
     const preheaderText = escapeHtml(
@@ -338,80 +351,100 @@ table, td, div, p, a, span, li { font-family: Arial, Helvetica, sans-serif !impo
 </style>
 <![endif]-->
 <style>
-:root { color-scheme: light dark; supported-color-schemes: light dark; }
+:root { color-scheme:light; supported-color-schemes:light; }
 body { margin:0; padding:0; word-break:break-word; -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
 img { border:0; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; }
 table { border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }
-.email-content a { color:${primaryColor}; text-decoration:underline; }
-.email-content h1, .email-content h2, .email-content h3, .email-content h4 { color:#0f172a; font-weight:700; line-height:1.3; margin:0 0 14px; }
-.email-content h2 { font-size:22px; }
-.email-content h3 { font-size:18px; }
-.email-content p { color:#334155; font-size:15px; line-height:1.75; margin:0 0 16px; }
+.email-content a { color:${primaryColor}; text-decoration:underline; text-underline-offset:2px; font-weight:500; }
+.email-content h1, .email-content h2, .email-content h3, .email-content h4 { color:#0f172a; font-weight:700; line-height:1.3; margin:0 0 16px; }
+.email-content h2 { font-size:20px; }
+.email-content h3 { font-size:17px; }
+.email-content p { color:#334155; font-size:15px; line-height:1.75; margin:0 0 18px; padding:0; }
 .email-content p:last-child { margin-bottom:0; }
 .email-content strong, .email-content b { color:#0f172a; }
-.email-content .email-section-label { font-weight:700; color:#0f172a; margin:20px 0 10px; }
-.email-content ul.email-list { margin:0 0 18px; padding:0 0 0 22px; list-style:disc; }
-.email-content ul.email-list li { color:#334155; font-size:15px; line-height:1.7; margin:0 0 8px; }
+.email-content .email-section-label { font-weight:700; color:#0f172a; margin:24px 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; }
+.email-content ul.email-list { margin:0 0 20px; padding:0 0 0 24px; list-style:disc; }
+.email-content ul.email-list li { color:#334155; font-size:15px; line-height:1.75; margin:0 0 8px; }
 .email-content ul.email-list li::marker { color:${primaryColor}; }
-.email-content ol { margin:0 0 18px; padding:0 0 0 22px; }
-.email-content ol li { color:#334155; font-size:15px; line-height:1.7; margin:0 0 8px; }
-.email-content hr { border:0; border-top:1px solid #e2e8f0; margin:24px 0; }
-.email-content blockquote { margin:16px 0; padding:14px 20px; background-color:${primaryColorSoft}; border-left:4px solid ${primaryColor}; border-radius:0 10px 10px 0; color:#334155; }
-.email-content img { max-width:100%; height:auto; }
-.email-content .email-card { background-color:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:18px 22px; margin:0 0 18px; }
-.email-content .email-badge { display:inline-block; background-color:${primaryColorSoft}; color:${shadeHexColor(primaryColor, 0.35)}; border-radius:999px; padding:4px 12px; font-size:12px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; margin:0 0 14px; }
-@media (prefers-color-scheme: dark) {
-  .email-body { background-color:#0b1220 !important; }
-  .email-outer { background-color:#0b1220 !important; }
-  .email-container { background-color:#111a2e !important; border-color:#253352 !important; }
-  .email-content { background-color:#111a2e !important; }
-  .email-content p, .email-content li { color:#c7d2e4 !important; }
-  .email-content h1, .email-content h2, .email-content h3, .email-content h4, .email-content strong, .email-content b, .email-content .email-section-label { color:#f1f5f9 !important; }
-  .email-content hr { border-top-color:#253352 !important; }
-  .email-footer { background-color:#0b1220 !important; }
-}
+.email-content ol { margin:0 0 20px; padding:0 0 0 24px; }
+.email-content ol li { color:#334155; font-size:15px; line-height:1.75; margin:0 0 8px; }
+.email-content hr { border:0; border-top:1px solid #e2e8f0; margin:28px 0; }
+.email-content blockquote { margin:20px 0; padding:16px 20px; background-color:${primaryColorSoft}; border-left:4px solid ${primaryColor}; border-radius:4px 12px 12px 4px; color:#1e293b; }
+.email-content img { max-width:100%; height:auto; border-radius:8px; }
+.email-content .email-card { background-color:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:20px 24px; margin:0 0 20px; }
+.email-content .email-badge { display:inline-block; background-color:${primaryColorSoft}; color:${shadeHexColor(primaryColor, 0.35)}; border-radius:999px; padding:6px 14px; font-size:12px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; margin:0 0 16px; }
 @media only screen and (max-width:620px) {
-  .email-outer { padding:12px !important; }
-  .email-container { width:100% !important; border-radius:14px !important; }
-  .email-header { padding:28px 22px !important; border-radius:14px 14px 0 0 !important; }
-  .email-header-title { font-size:24px !important; line-height:1.25 !important; margin-top:14px !important; }
-  .email-content { padding:26px 22px !important; }
-  .email-footer { padding:26px 22px !important; border-radius:0 0 14px 14px !important; }
-  .email-cta-table { width:100% !important; margin:20px 0 !important; }
+  .email-outer-cell { padding:16px 8px !important; }
+  .email-container { width:100% !important; border-radius:12px !important; }
+  .email-header { padding:24px 20px !important; }
+  .email-header-title { font-size:22px !important; line-height:1.3 !important; margin-top:0px !important; }
+  .email-content { padding:24px 20px 28px !important; }
+  .email-footer { padding:24px 20px !important; }
+  .email-cta-table { width:100% !important; margin:24px 0 !important; }
   .email-cta-cell { width:100% !important; }
   .email-cta { display:block !important; width:100% !important; box-sizing:border-box; text-align:center; }
 }
 </style>
 </head>
-<body class="email-body" style="margin:0; padding:0; background-color:${pageBg};">
+<body class="email-body" style="margin:0; padding:0; background-color:${pageBg}; -webkit-font-smoothing:antialiased;">
 <div style="display:none; max-height:0; overflow:hidden; mso-hide:all; font-size:1px; line-height:1px; color:${pageBg};">${preheaderText}&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-outer" style="background-color:${pageBg}; padding:32px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-outer" bgcolor="${pageBg}" style="width:100%; background-color:${pageBg}; border-collapse:collapse;">
 <tr>
-<td align="center">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" class="email-container" data-ogsb="#111a2e" style="width:600px; max-width:600px; background-color:#ffffff; border:1px solid ${cardBorder}; border-radius:20px; overflow:hidden; box-shadow:0 20px 45px rgba(15, 23, 42, 0.10);">
+<td align="center" class="email-outer-cell" style="padding:36px 16px; background-color:${pageBg};">
+<!--[if mso]>
+<table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td>
+<![endif]-->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-container" style="max-width:600px; width:100%; background-color:#ffffff; border:1px solid ${cardBorder}; border-radius:16px; overflow:hidden; margin:0 auto; box-shadow:0 4px 20px rgba(0,0,0,0.03);">
 <tr>
-<td class="email-header" bgcolor="${primaryColor}" style="background-color:${primaryColor}; background-image:radial-gradient(120% 170% at 100% 0%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0) 52%), linear-gradient(135deg, ${primaryColor} 0%, ${primaryColorDark} 100%); padding:36px 48px; border-radius:20px 20px 0 0;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td>${logoBlock}</td></tr></table>
-${isDirectEmail ? "" : `<h1 class="email-header-title" style="margin:20px 0 0; font-family:${fontStack}; font-size:28px; line-height:1.25; font-weight:700; color:#ffffff; letter-spacing:-0.01em;">${escapeHtml(finalHeader)}</h1>`}
+<td class="email-header" bgcolor="${primaryColorSoft}" style="background-color:${primaryColorSoft}; padding:0; border-top:4px solid ${primaryColor}; border-bottom:1px solid ${tintHexColor(primaryColor, 0.85)}; text-align:left;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td style="padding:28px 0 24px;" width="36">&nbsp;</td>
+<td style="padding:28px 0 24px; text-align:left;" width="528">
+${logoBlock}
+${isDirectEmail ? "" : `<h1 class="email-header-title" style="margin:0 16px 0 0 !important; font-family:${fontStack}; font-size:24px; line-height:1.35; font-weight:700; color:#0f172a; letter-spacing:-0.02em; text-align:left;">${escapeHtml(finalHeader)}</h1>`}
+</td>
+<td style="padding:28px 0 24px;" width="36">&nbsp;</td>
+</tr>
+</table>
 </td>
 </tr>
 <tr>
-<td class="email-content" data-ogsb="#111a2e" data-ogsc="#c7d2e4" style="background-color:#ffffff; padding:40px 48px; font-family:${fontStack}; font-size:15px; line-height:1.75; color:#334155;">
-${isDirectEmail ? `<h2 style="margin-top:0;">${escapeHtml(finalHeader)}</h2>` : ""}
+<td class="email-content" align="left" style="background-color:#ffffff; padding:0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td style="padding:32px 0 36px; background-color:#ffffff;" width="36">&nbsp;</td>
+<td style="padding:32px 0 36px; background-color:#ffffff; font-family:${fontStack}; font-size:15px; line-height:1.75; color:#334155; text-align:left;" width="528">
+${isDirectEmail ? `<h2 style="margin:0 0 20px; font-family:${fontStack}; font-size:20px; font-weight:700; color:#0f172a; text-align:left;">${escapeHtml(finalHeader)}</h2>` : ""}
 ${content}
 </td>
+<td style="padding:32px 0 36px; background-color:#ffffff;" width="36">&nbsp;</td>
+</tr>
+</table>
+</td>
 </tr>
 <tr>
-<td class="email-footer" bgcolor="#0f172a" data-ogsb="#0b1220" style="background-color:#0f172a; padding:32px 48px; border-radius:0 0 20px 20px; font-family:${fontStack};">
-<div style="font-size:13px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; color:#ffffff;">${siteName}</div>
-<div style="margin-top:10px; font-size:13px; line-height:1.8; color:#94a3b8;">
+<td class="email-footer" bgcolor="#0f172a" style="background-color:#0f172a; padding:0; border-top:1px solid #1e293b;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td style="padding:28px 0 30px;" width="36">&nbsp;</td>
+<td style="padding:28px 0 30px; font-family:${fontStack}; text-align:left;" width="528">
+<div style="font-size:13px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#ffffff; margin-top:15px;">${siteName}</div>
+<div style="margin-top:8px; font-size:12px; line-height:1.8; color:#94a3b8;">
 ${companyName}${footerMetaParts.length > 0 ? ` &middot; ${footerMetaParts.join(" &middot; ")}` : ""}
 </div>
 ${customFooterBlock}
-<div style="margin-top:16px; font-size:12px; line-height:1.7; color:#64748b;">&copy; ${currentYear} ${companyName}. All rights reserved.</div>
+<div style="margin-top:14px; font-size:11px; line-height:1.6; color:#64748b;">&copy; ${currentYear} ${companyName}. All rights reserved.</div>
+</td>
+<td style="padding:28px 0 30px;" width="36">&nbsp;</td>
+</tr>
+</table>
 </td>
 </tr>
 </table>
+<!--[if mso]>
+</td></tr></table>
+<![endif]-->
 </td>
 </tr>
 </table>
