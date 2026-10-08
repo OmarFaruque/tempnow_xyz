@@ -152,6 +152,26 @@ const samples: Sample[] = [
         },
     },
     {
+        name: 'logo',
+        description: 'Wide horizontal logo — the page-2 header must not overlap it',
+        quoteData: { ...baseQuote, promoCode: 'WELCOME10' },
+        user: baseUser,
+        policyNumber: 'P-2427427',
+        settings: { ...ukSettings, logo: '/tempnow-logo-horizontal.png' },
+        options: {
+            payment: {
+                paid: true,
+                method: 'stripe',
+                reference: 'pi_3Qk8sdK2eZvKYlo2C1x9QpRt',
+                date: '2026-10-08T11:32:00.000Z',
+                status: 'paid',
+                promoCode: 'WELCOME10',
+                listAmount: 32.8,
+                amount: 24.51,
+            },
+        },
+    },
+    {
         name: 'edge',
         description: 'Long values, unicode name, no email — robustness sample',
         quoteData: {

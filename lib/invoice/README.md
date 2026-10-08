@@ -81,6 +81,24 @@ Recap card, payment summary + terms, "how to access your documents" steps,
   `drawSvgPath()` directly. Setting `borderWidth` without a `borderColor` makes
   pdf-lib stroke in black — `drawCard()` only passes a width when a colour is set.
 
+## Masthead layout rules
+
+Page 1 and page 2 use the same rule set, so nothing can overlap:
+
+1. `drawLogoPlate()` returns its own geometry (`{ x, top, width, height, right }`)
+   and is capped at a share of the page width — **46% on page 1, 40% on page 2**
+   (`drawMasthead` / `drawCompactMasthead`). The wordmark also shrinks to fit the
+   plate, and logo art is scaled to fit inside it.
+2. The right-hand column (document title, heading, invoice reference, status
+   chip) always starts at `plate.right + MASTHEAD_TITLE_GAP` (18pt).
+3. `fitMastheadTitle()` fits the title into that column: keep the preferred size
+   and wrap onto up to two lines, shrink down to a minimum size, then truncate.
+   It is exported and font-agnostic, so `pnpm invoice:verify` unit tests the
+   geometry directly.
+
+Increasing `maxWidth` on those two calls is the only knob needed if a site's
+logo wants more room.
+
 ## Configuration (Admin → Settings → General)
 
 | Setting | Effect on the invoice |
@@ -117,6 +135,7 @@ Rendered samples live in `docs/` (regenerate with `pnpm invoice:preview`):
 | --- | --- |
 | `docs/invoice-template-page-1.png` | Page 1 — the invoice itself |
 | `docs/invoice-template-page-2.png` | Page 2 — documents & cover information |
+| `docs/invoice-template-wide-logo-page-2.png` | Page 2 with a wide (2.89:1) logo — the title wraps instead of overlapping |
 | `docs/invoice-template-edge-case.png` | Unicode names, long values, 12% inclusive tax, £1,212.05 |
 | `docs/invoice-template-sample.pdf` | The full two-page PDF |
 

@@ -16,7 +16,7 @@
 import { PDFDocument } from 'pdf-lib';
 import { buildInvoiceDocument } from '../lib/invoice/model';
 import { buildInvoiceBranding } from '../lib/invoice/branding';
-import { renderInvoicePdf } from '../lib/invoice/render';
+import { fitMastheadTitle, renderInvoicePdf } from '../lib/invoice/render';
 import {
     amountInWords,
     formatCoverDate,
@@ -28,6 +28,7 @@ import {
     truncate,
 } from '../lib/invoice/format';
 import { createInvoiceTheme } from '../lib/invoice/theme';
+import { loadInvoiceLogo } from '../lib/invoice/assets';
 import type { InvoiceOptions } from '../lib/invoice/types';
 
 let failures = 0;
@@ -95,6 +96,8 @@ interface Case {
     quoteData: any;
     user: any;
     options?: InvoiceOptions;
+    /** Settings overrides (branding, logo, currency, tax, ...). */
+    settings?: Record<string, any>;
     pages: 'two' | 'atLeastTwo';
 }
 
@@ -182,6 +185,25 @@ const cases: Case[] = [
         pages: 'two',
     },
     {
+        // Regression: a wide logo (the site's own /uploads/logo.png is 1000x346)
+        // used to push the page-2 heading underneath the logo plate.
+        name: 'wide horizontal logo',
+        quoteData: { ...baseQuote, promoCode: 'WELCOME10' },
+        user,
+        options: {
+            payment: {
+                paid: true,
+                method: 'stripe',
+                reference: 'pi_wide',
+                promoCode: 'WELCOME10',
+                listAmount: 32.8,
+                amount: 24.51,
+            },
+        },
+        settings: { ...settings, logo: '/tempnow-logo-horizontal.png' },
+        pages: 'two',
+    },
+    {
         name: 'many line items (tax + discount)',
         quoteData: {
             ...baseQuote,
@@ -206,7 +228,7 @@ const cases: Case[] = [
 ];
 
 async function renderCase(testCase: Case) {
-    const branding = buildInvoiceBranding(settings);
+    const branding = buildInvoiceBranding({ ...settings, ...(testCase.settings || {}) });
     const document = buildInvoiceDocument({
         quoteData: testCase.quoteData,
         user: testCase.user,
@@ -216,10 +238,17 @@ async function renderCase(testCase: Case) {
     });
 
     const pdf = await PDFDocument.create();
-    await renderInvoicePdf(pdf, { document, branding, logo: null });
+
+    // Embed the real logo asset when the case configures one (exercises
+    // lib/invoice/assets.ts, including the plate sizing).
+    const logo = branding.logoUrl
+        ? await loadInvoiceLogo(pdf, branding.logoUrl)
+        : null;
+
+    await renderInvoicePdf(pdf, { document, branding, logo });
     const bytes = await pdf.save();
 
-    return { document, pdf, bytes };
+    return { document, pdf, bytes, logo };
 }
 
 async function main() {
@@ -315,6 +344,59 @@ async function main() {
             checks += 1;
             console.error(`  FAIL ${testCase.name}: threw ${(error as Error).message}`);
         }
+    }
+
+    console.log('\nMasthead title fitting (page 2 overlap regression)');
+    {
+        const stub = createFontStub();
+        const longTitle = 'Your documents & cover information';
+
+        // Page geometry mirroring the compact masthead on A4.
+        const pageWidth = 595.28;
+        const margin = 46;
+        const right = pageWidth - margin;
+
+        // The plate cap used by the compact masthead, with the real logo aspect.
+        const plateMaxWidth = pageWidth * 0.4;
+        const gap = 18;
+        const availableWidth = right - (margin + plateMaxWidth + gap);
+
+        check('a 40%-wide plate still leaves room for the heading', availableWidth > 120,
+            `${availableWidth.toFixed(0)}pt available`);
+
+        const fit = fitMastheadTitle(longTitle, stub, {
+            maxWidth: availableWidth,
+            preferredSize: 20,
+            minSize: 12,
+            maxLines: 2,
+        });
+
+        check('every title line stays inside the available column',
+            fit.lines.every((line) => stub.widthOfTextAtSize(line, fit.size) <= availableWidth + 0.01),
+            fit.lines.map((line) => `${line} (${stub.widthOfTextAtSize(line, fit.size).toFixed(0)}pt)`).join(' | '));
+        check('title keeps at least the minimum size', fit.size >= 12);
+        check('title never exceeds the allowed line count', fit.lines.length <= 2);
+        check('title text is preserved when it wraps', fit.lines.join(' ').includes('cover information'));
+
+        // A short title must not be touched.
+        const shortFit = fitMastheadTitle('INVOICE', stub, {
+            maxWidth: availableWidth,
+            preferredSize: 20,
+            minSize: 12,
+            maxLines: 2,
+        });
+        check('short titles keep their preferred size', shortFit.size === 20 && shortFit.lines.length === 1);
+
+        // Extreme: a very narrow column must still produce usable text.
+        const narrowFit = fitMastheadTitle(longTitle, stub, {
+            maxWidth: 90,
+            preferredSize: 20,
+            minSize: 12,
+            maxLines: 2,
+        });
+        check('narrow columns fall back without overflowing',
+            narrowFit.lines.every((line) => stub.widthOfTextAtSize(line, narrowFit.size) <= 90.5),
+            narrowFit.lines.join(' | '));
     }
 
     console.log('\nTheme');

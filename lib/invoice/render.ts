@@ -242,11 +242,23 @@ function drawAuroraWave(
 function drawLogoPlate(
     ctx: Ctx,
     page: PDFPage,
-    options: { x: number; top: number; height: number; minWidth: number; padding: number }
-): void {
+    options: {
+        x: number;
+        top: number;
+        height: number;
+        minWidth: number;
+        padding: number;
+        /**
+         * Hard cap for the plate. The masthead title is right-aligned, so the
+         * plate must never be allowed to grow into it (a wide logo used to
+         * overlap the page-2 heading).
+         */
+        maxWidth: number;
+    }
+): LogoPlate {
     const { theme, fonts, logo, doc } = ctx;
     const { color } = theme;
-    const { x, top, height, minWidth, padding } = options;
+    const { x, top, height, minWidth, padding, maxWidth } = options;
 
     const wordmark = safeText(doc.seller.name || theme.palette.primary).toUpperCase();
     const maxWordmarkSize = height >= 44 ? 14.5 : 11.5;
@@ -254,7 +266,7 @@ function drawLogoPlate(
     // must never spill outside the white plate.
     let wordmarkSize = maxWordmarkSize;
     let wordmarkWidth = fonts.bold.widthOfTextAtSize(wordmark, wordmarkSize);
-    const maxWordmarkWidth = Math.max(minWidth, 250) - 32;
+    const maxWordmarkWidth = Math.max(minWidth, maxWidth) - 32;
 
     while (wordmarkWidth > maxWordmarkWidth && wordmarkSize > 7) {
         wordmarkSize -= 0.25;
@@ -265,7 +277,7 @@ function drawLogoPlate(
     const contentWidth = logo
         ? height * 1.9 * Math.min(Math.max(logo.aspect, 0.9), 4)
         : wordmarkWidth;
-    const plateWidth = Math.max(minWidth, Math.min(contentWidth + padding * 2, 250));
+    const plateWidth = Math.max(minWidth, Math.min(contentWidth + padding * 2, maxWidth));
     const plateHeight = height;
 
     drawCard(page, {
@@ -308,6 +320,97 @@ function drawLogoPlate(
             color: theme.color.ink,
         });
     }
+
+    // The caller needs the right edge to lay the title out beside the plate.
+    return { x, top, width: plateWidth, height: plateHeight, right: x + plateWidth };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Masthead title fitting                                                    */
+/* ------------------------------------------------------------------------ */
+
+/** The minimum space that must stay clear between the plate and the title. */
+const MASTHEAD_TITLE_GAP = 18;
+
+interface LogoPlate {
+    x: number;
+    top: number;
+    width: number;
+    height: number;
+    /** Right edge of the plate — the title must start after this + the gap. */
+    right: number;
+}
+
+interface MastheadTitleFit {
+    size: number;
+    lines: string[];
+    lineHeight: number;
+}
+
+/**
+ * Fit the right-aligned masthead title into the space left of the logo plate.
+ *
+ * Strategy, in order of preference:
+ *   1. keep the preferred size and wrap onto up to `maxLines` lines
+ *   2. shrink (down to `minSize`) until it fits the same number of lines
+ *   3. truncate the last line as a last resort
+ *
+ * Exported (and font-agnostic) so the geometry can be unit tested.
+ */
+export function fitMastheadTitle(
+    text: string,
+    font: { widthOfTextAtSize: (text: string, size: number) => number },
+    options: {
+        maxWidth: number;
+        preferredSize: number;
+        minSize: number;
+        maxLines?: number;
+    }
+): MastheadTitleFit {
+    const { maxWidth, preferredSize, minSize, maxLines = 1 } = options;
+    const clean = safeText(text);
+    const available = Math.max(40, maxWidth);
+
+    const linesFor = (value: string, size: number): string[] =>
+        wrapText(value, font as never, size, available).slice(0, maxLines);
+
+    const fits = (lines: string[], size: number): boolean =>
+        lines.length > 0 &&
+        lines.length <= maxLines &&
+        lines.every((line) => font.widthOfTextAtSize(line, size) <= available + 0.01);
+
+    // 1 + 2: preferred size first, then step down.
+    for (let size = preferredSize; size >= minSize; size -= 0.5) {
+        const lines = linesFor(clean, size);
+
+        if (lines.length > maxLines) break;
+        if (fits(lines, size)) {
+            return { size, lines, lineHeight: Math.round(size * 1.12) };
+        }
+    }
+
+    // 3: smallest allowed size, truncated to the available width.
+    const size = minSize;
+    const lines = linesFor(clean, size);
+    const lastIndex = Math.max(lines.length - 1, 0);
+
+    while (
+        lines[lastIndex] &&
+        lines.length <= maxLines &&
+        font.widthOfTextAtSize(lines[lastIndex], size) > available
+    ) {
+        lines[lastIndex] = `${lines[lastIndex].slice(0, -1)}`;
+    }
+
+    return {
+        size,
+        lines: lines.slice(0, maxLines).map((line, index) =>
+            index === lines.slice(0, maxLines).length - 1
+                ? truncate(line, font as never, size, available)
+                : line
+        ),
+        lineHeight: Math.round(size * 1.12),
+    };
 }
 
 function drawStatusChip(
@@ -392,26 +495,35 @@ function drawMasthead(ctx: Ctx, page: PDFPage): void {
         inset: 14,
     });
 
-    drawLogoPlate(ctx, page, {
+    const plate = drawLogoPlate(ctx, page, {
         x: metrics.pageMargin,
         top: 22,
         height: 46,
         minWidth: 150,
         padding: 14,
+        // Never let a wide logo push the document title off the header.
+        maxWidth: width * 0.46,
     });
+
+    // Tagline sits under the plate, but must also stop before the title column.
+    const right = width - metrics.pageMargin;
+    const titleColumnWidth = Math.max(120, right - (plate.right + MASTHEAD_TITLE_GAP));
+    const tagline = safeText(doc.cover.insuranceType).toUpperCase();
+    const taglineWidth = trackedWidth(tagline, fonts.bold, theme.type.label, 1.5);
 
     drawTracked(page, {
         x: metrics.pageMargin + 2,
         top: baseline(80, theme.type.label),
-        text: safeText(doc.cover.insuranceType).toUpperCase(),
+        text:
+            taglineWidth <= plate.width + MASTHEAD_TITLE_GAP
+                ? tagline
+                : truncate(tagline, fonts.bold, theme.type.label, plate.width),
         font: fonts.bold,
         size: theme.type.label,
         color: color.onPrimary,
         opacity: 0.85,
         tracking: 1.5,
     });
-
-    const right = width - metrics.pageMargin;
 
     drawTextRight(page, {
         x: right,
@@ -423,12 +535,20 @@ function drawMasthead(ctx: Ctx, page: PDFPage): void {
         opacity: 0.78,
     });
 
+    // The display title shrinks rather than sliding under the logo plate.
+    const titleFit = fitMastheadTitle(safeText(doc.documentTitle).toUpperCase(), fonts.bold, {
+        maxWidth: titleColumnWidth,
+        preferredSize: theme.type.display,
+        minSize: 20,
+        maxLines: 1,
+    });
+
     drawTextRight(page, {
         x: right,
-        top: baseline(54, theme.type.display),
-        text: safeText(doc.documentTitle).toUpperCase(),
+        top: baseline(54, titleFit.size),
+        text: titleFit.lines[0] || '',
         font: fonts.bold,
-        size: theme.type.display,
+        size: titleFit.size,
         color: color.onPrimary,
     });
 
@@ -469,33 +589,50 @@ function drawCompactMasthead(ctx: Ctx, page: PDFPage, title: string): void {
         inset: 14,
     });
 
-    drawLogoPlate(ctx, page, {
+    const plate = drawLogoPlate(ctx, page, {
         x: metrics.pageMargin,
         top: 18,
         height: 34,
         minWidth: 120,
         padding: 10,
+        // Page 2's heading is long, so the plate gets a smaller share of the
+        // header than on page 1.
+        maxWidth: width * 0.4,
     });
 
     const right = width - metrics.pageMargin;
 
+    // Everything to the right of the plate shares the remaining column, so the
+    // title can never run underneath the logo (the reported overlap).
+    const availableWidth = Math.max(60, right - (plate.right + MASTHEAD_TITLE_GAP));
+
+    const metaText = `${safeText(doc.documentTitle).toUpperCase()} ${safeText(doc.invoiceNumber)}`;
     drawTextRight(page, {
         x: right,
         top: baseline(20, theme.type.label),
-        text: `${safeText(doc.documentTitle).toUpperCase()} ${safeText(doc.invoiceNumber)}`,
+        text: truncate(metaText, fonts.bold, theme.type.label, availableWidth),
         font: fonts.bold,
         size: theme.type.label,
         color: color.onPrimary,
         opacity: 0.85,
     });
 
-    drawTextRight(page, {
-        x: right,
-        top: baseline(38, theme.type.title),
-        text: title,
-        font: fonts.bold,
-        size: theme.type.title,
-        color: color.onPrimary,
+    const titleFit = fitMastheadTitle(title, fonts.bold, {
+        maxWidth: availableWidth,
+        preferredSize: theme.type.title,
+        minSize: 12,
+        maxLines: 2,
+    });
+
+    titleFit.lines.forEach((line, index) => {
+        drawTextRight(page, {
+            x: right,
+            top: baseline(38 + index * titleFit.lineHeight, titleFit.size),
+            text: line,
+            font: fonts.bold,
+            size: titleFit.size,
+            color: color.onPrimary,
+        });
     });
 }
 
