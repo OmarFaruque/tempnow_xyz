@@ -3,13 +3,22 @@ import nodemailer from "nodemailer"
 import { db } from '@/lib/db';
 import { settings } from '@/lib/schema';
 import { eq } from 'drizzle-orm';
+import {
+  buildCodeBox,
+  buildCtaButton,
+  buildEmailShell,
+  buildMessageCard,
+  enhanceEmailContent,
+  getEmailBranding,
+} from "@/lib/email-theme"
+import { escapeHtml } from "@/core/helpers"
 
 
 export interface EmailTemplate {
   to: string
   subject: string
   html: string,
-  attachments?:any
+  attachments?: any
 }
 
 const APPLE_MAIL_DOMAINS = new Set(["icloud.com", "me.com", "mac.com"]);
@@ -70,11 +79,12 @@ export async function sendEmail({ to, subject, html, attachments = [] }: EmailTe
     const resendSettings = await getResendSettings();
     const mailDriver = process.env.MAIL_DRIVER;
     const text = htmlToPlainText(html);
+    const branding = await getEmailBranding();
 
     if (mailDriver === "resend" && resendSettings && resendSettings.apiKey) {
       const resend = new Resend(resendSettings.apiKey);
-      const fromAddress = resendSettings.fromEmail || "Tempnow <onboarding@resend.dev>";
-      
+      const fromAddress = resendSettings.fromEmail || `${branding.siteName} <onboarding@resend.dev>`;
+
       const data = await resend.emails.send({
         from: fromAddress,
         to: [to],
@@ -95,7 +105,7 @@ export async function sendEmail({ to, subject, html, attachments = [] }: EmailTe
       })
 
       const info = await transporter.sendMail({
-        from: "Tempnow <noreply@local.dev>",
+        from: `${branding.siteName} <noreply@local.dev>`,
         to,
         subject,
         html,
@@ -133,44 +143,42 @@ function replaceEmailVariables(text: string, data: Record<string, any>): string 
   });
 }
 
-function buildEmailHtml(siteName: string, companyName: string, subject: string, header: string, content: string, footer: string, email_for?: any): string {
-  const finalHeader = header || subject;
-  const finalFooter = footer || `&copy; ${new Date().getFullYear()} ${companyName}. All rights reserved.`;
+/**
+ * Replace `{{variable}}` placeholders that stand for rich HTML blocks (CTA
+ * buttons, code boxes, message cards) with invisible tokens, so the plain-text
+ * content can be enhanced first and the blocks injected afterwards without
+ * being mangled by the paragraph/list formatting.
+ */
+function protectBlockPlaceholders(
+  content: string,
+  variableNames: string[]
+): { content: string; tokens: Record<string, string> } {
+  const tokens: Record<string, string> = {}
+  let protectedContent = content
+  for (const name of variableNames) {
+    const token = `\u0000EMAIL_BLOCK_${name.toUpperCase()}\u0000`
+    tokens[token] = name
+    protectedContent = protectedContent.replace(
+      new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`, "g"),
+      token
+    )
+  }
+  return { content: protectedContent, tokens }
+}
 
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${subject}</title>
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #0d9488, #14b8a6); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
-        .button { display: inline-block; background: #0d9488; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 20px 0; }
-        .footer { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 14px; }
-        .logo { font-size: 24px; font-weight: bold; margin-bottom: 10px; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <div class="logo">${siteName || "Tempnow"}</div>
-          ${email_for != 'direct_email' ? `<h1>${finalHeader}</h1>` : ''}
-        </div>
-        <div class="content">
-          ${email_for == 'direct_email' ? `<h2>${finalHeader}</h2>` : ''}
-          ${content}
-        </div>
-        <div class="footer">
-          ${finalFooter.replace(/\n/g, '<br>')}
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
+function injectBlocks(
+  html: string,
+  tokens: Record<string, string>,
+  blocks: Record<string, string>
+): string {
+  let result = html
+  for (const [token, name] of Object.entries(tokens)) {
+    const block = blocks[name]
+    if (block !== undefined) {
+      result = result.split(token).join(block)
+    }
+  }
+  return result
 }
 
 export async function createAIDocumentPurchaseEmail(
@@ -187,38 +195,41 @@ export async function createAIDocumentPurchaseEmail(
   const template = templates?.documentPurchase;
   if (!template) return { subject: "Error", html: "<body><p>Email template not found</p></body>" };
 
-  const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-  let siteName = "";
-  let companyName = "";
-  if (generalSettings && generalSettings.value) {
-    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-    siteName = parsedSettings.siteName || "";
-    companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-  }
-
-  const data = { firstName, lastName, orderId, orderDate, amount: amount.toFixed(2), documentType, downloadLink, siteName, companyName };
-  const subject = replaceEmailVariables(template.subject, data);
-  const header = replaceEmailVariables(template.header, data);
-  const footer = replaceEmailVariables(template.footer, data);
+  const branding = await getEmailBranding();
 
   const isImagePurchase = documentType.toLowerCase().startsWith("ai image:");
   const resolvedDownloadLink = isImagePurchase
     ? downloadLink.replace("/api/ai-documents/download-pdf/", "/api/ai-images/download/")
     : downloadLink;
 
-  let content = replaceEmailVariables(template.content, {
-    ...data,
+  const data = {
+    firstName,
+    lastName,
+    orderId,
+    orderDate,
+    amount: amount.toFixed(2),
+    documentType,
     downloadLink: resolvedDownloadLink,
-  });
-  if (template.content.includes('{{downloadLink}}')) {
-        const icon = isImagePurchase ? "&#128247;" : "&#128196;";
-        const label = isImagePurchase ? "Download Image" : "Download Document";
-        const buttonHtml = `<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" role=\"presentation\" style=\"margin: 20px auto;\"><tr><td align=\"center\" style=\"background-color: #0d9488; border-radius: 6px;\"><a href=\"${resolvedDownloadLink}\" target=\"_blank\" style=\"display: inline-block; color: white; text-decoration: none; padding: 12px 24px; font-weight: bold; border-radius: 6px; font-family: Arial, sans-serif; font-size: 16px;\"><span style=\"vertical-align: middle;\">${icon}</span><span style=\"vertical-align: middle; margin-left: 8px;\">${label}</span></a></td></tr></table>`;
-        content = content.replace(resolvedDownloadLink, buttonHtml);
-  }
-  content = content.replace(/\n/g, '<br>');
+    siteName: branding.siteName,
+    companyName: branding.companyName,
+  };
 
-  const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
+  const subject = replaceEmailVariables(template.subject, data);
+  const header = replaceEmailVariables(template.header, data);
+  const footer = replaceEmailVariables(template.footer, data);
+
+  const { content: protectedContent, tokens } = protectBlockPlaceholders(template.content, ["downloadLink"]);
+  let content = replaceEmailVariables(protectedContent, data);
+  content = enhanceEmailContent(content);
+  content = injectBlocks(content, tokens, {
+    downloadLink: buildCtaButton(
+      resolvedDownloadLink,
+      isImagePurchase ? "Download Image" : "Download Document",
+      branding,
+      { icon: isImagePurchase ? "&#128247;" : "&#128196;" }
+    ),
+  });
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
   return { subject, html };
 }
@@ -241,30 +252,23 @@ export async function createInsurancePolicyEmail(
   const template = templates?.policyConfirmation;
   if (!template) return { subject: "Error", html: "<body><p>Email template not found</p></body>" };
 
-  const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-  let siteName = "";
-  let companyName = "";
-  if (generalSettings && generalSettings.value) {
-    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-    siteName = parsedSettings.siteName || "";
-    companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-  }
+  const branding = await getEmailBranding();
 
-  const data = { 
-    firstName, 
-    lastName, 
-    policyNumber, 
-    vehicleReg, 
-    vehicleMake, 
-    vehicleModel, 
-    vehicleYear, 
-    startDate, 
-    endDate, 
-    premium: amount.toFixed(2), 
-    policyDocumentLink, 
-    coverageType, 
-    siteName, 
-    companyName,
+  const data = {
+    firstName,
+    lastName,
+    policyNumber,
+    vehicleReg,
+    vehicleMake,
+    vehicleModel,
+    vehicleYear,
+    startDate,
+    endDate,
+    premium: amount.toFixed(2),
+    policyDocumentLink,
+    coverageType,
+    siteName: branding.siteName,
+    companyName: branding.companyName,
     viewDocument: policyDocumentLink
   };
 
@@ -272,16 +276,19 @@ export async function createInsurancePolicyEmail(
   const header = replaceEmailVariables(template.header, data);
   const footer = replaceEmailVariables(template.footer, data);
 
-  let content = replaceEmailVariables(template.content, data);
-  if (template.content.includes('{{viewDocument}}')) {
-      const buttonHtml = `<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" role=\"presentation\" style=\"margin: 20px auto;\"><tr><td align=\"center\" style=\"background-color: #0d9488; border-radius: 6px;\"><a href=\"${policyDocumentLink}\" target=\"_blank\" style=\"display: inline-block; color: white; text-decoration: none; padding: 12px 24px; font-weight: bold; border-radius: 6px; font-family: Arial, sans-serif; font-size: 16px;\"><span style=\"vertical-align: middle;\">&#128196;</span><span style=\"vertical-align: middle; margin-left: 8px;\">View Document</span></a></td></tr></table>`;
-      content = content.replace(policyDocumentLink, buttonHtml);
-  }
-  content = content.replace(/\n/g, '<br>');
+  const { content: protectedContent, tokens } = protectBlockPlaceholders(template.content, [
+    "viewDocument",
+    "policyDocumentLink",
+  ]);
+  let content = replaceEmailVariables(protectedContent, data);
+  content = enhanceEmailContent(content);
+  content = injectBlocks(content, tokens, {
+    viewDocument: buildCtaButton(policyDocumentLink, "View Document", branding, { icon: "&#128196;" }),
+    policyDocumentLink: buildCtaButton(policyDocumentLink, "View Document", branding, { icon: "&#128196;" }),
+  });
 
-  const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
-  
   return { subject, html };
 }
 
@@ -295,53 +302,55 @@ export async function createAdminNotificationEmail(
   const templates = await getEmailTemplates();
   const template = templates?.adminNotification;
   if (!template) return { subject: "Error", html: "<body><p>Email template not found</p></body>" };
-  
+
+
+  const branding = await getEmailBranding();
+
   const typeLabel = type === "ai_document" ? "AI Document" : "Docs";
-  const data = { typeLabel, customerName, customerEmail, amount: amount.toFixed(2), details, time: new Date().toLocaleString() };
+  const data = {
+    typeLabel,
+    customerName,
+    customerEmail,
+    amount: amount.toFixed(2),
+    details,
+    time: new Date().toLocaleString(),
+    siteName: branding.siteName,
+    companyName: branding.companyName,
+  };
 
   const subject = replaceEmailVariables(template.subject, data);
   const header = replaceEmailVariables(template.header, data);
-  const content = replaceEmailVariables(template.content, data).replace(/\n/g, '<br>');
+  const content = enhanceEmailContent(replaceEmailVariables(template.content, data));
   const footer = replaceEmailVariables(template.footer, data);
-  const html = buildEmailHtml("", "", subject, header, content, footer); // No site/company name needed for admin emails
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
   return { subject, html };
 }
 
 export async function sendTicketConfirmationEmail({
-    to,
-    name,
-    ticketId,
-    }: {
-    to: string
-    name: string
-    ticketId: string
-    }) {
-    const templates = await getEmailTemplates();
-    const template = templates?.ticketConfirmation;
-    if (!template) return;
+  to,
+  name,
+  ticketId,
+}: {
+  to: string
+  name: string
+  ticketId: string
+}) {
+  const templates = await getEmailTemplates();
+  const template = templates?.ticketConfirmation;
+  if (!template) return;
 
-    const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-    let siteName = "";
-    let companyName = "";
-    if (generalSettings && generalSettings.value) {
-      const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-      siteName = parsedSettings.siteName || "";
-      companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-    }
+  const branding = await getEmailBranding();
 
-    const data = { name, ticketId, siteName, companyName };
-    const subject = replaceEmailVariables(template.subject, data);
-    const header = replaceEmailVariables(template.header, data);
-    let content = replaceEmailVariables(template.content, data);
-    content = content.replace(/\n/g, '<br>');
+  const data = { name, ticketId, siteName: branding.siteName, companyName: branding.companyName };
+  const subject = replaceEmailVariables(template.subject, data);
+  const header = replaceEmailVariables(template.header, data);
+  const content = enhanceEmailContent(replaceEmailVariables(template.content, data));
 
-    const footer = replaceEmailVariables(template.footer, data);
-    const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
+  const footer = replaceEmailVariables(template.footer, data);
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
-    
-
-    return sendEmail({ to, subject, html, attachments: [] });
+  return sendEmail({ to, subject, html, attachments: [] });
 }
 
 export async function sendExistingTicketEmail({
@@ -353,91 +362,73 @@ export async function sendExistingTicketEmail({
   name: string;
   ticketToken: string;
 }) {
-  const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-  let siteName = "";
-  let companyName = "";
-  if (generalSettings && generalSettings.value) {
-    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-    siteName = parsedSettings.siteName || "Tempnow";
-    companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-  }
+  const branding = await getEmailBranding();
 
   const subject = "You have an existing open ticket";
   const header = "Open Ticket Notification";
   const ticketUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/ticket/${ticketToken}`;
-  
+
   const content = `
-    <p>Hello ${name},</p>
+     <p>Hello ${escapeHtml(name)},</p>
     <p>You are receiving this email because you tried to open a new support ticket, but you already have an open ticket with us.</p>
-    <p>Please check the status of your existing ticket or add a new reply by clicking the button below.</p>
-    <div style="text-align: center; margin: 20px 0;">
-      <a href="${ticketUrl}" style="display: inline-block; padding: 12px 24px; font-size: 16px; color: #ffffff; background-color: #0d9488; border-radius: 8px; text-decoration: none;">View Your Open Ticket</a>
-    </div>
+    <p>Please check the status of your existing ticket or add a new reply using the button below.</p>
+    ${buildCtaButton(ticketUrl, "View Your Open Ticket", branding, { icon: "&#127915;" })}
     <p>Submitting a new ticket is not necessary. We will respond to your existing ticket as soon as possible.</p>
   `;
   const footer = "Thank you for your patience.";
 
-  const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
   return sendEmail({ to, subject, html });
 }
 
 export async function sendTicketReplyEmail({
-    to,
+  to,
+  name,
+  ticketId,
+  message,
+  attachments = [],
+  ticketUrl
+}: {
+  to: string
+  name: string
+  ticketId: string
+  message: string
+  attachments?: any[]
+  ticketUrl: string
+}) {
+  const templates = await getEmailTemplates();
+  const template = templates?.ticketReply;
+  if (!template) return;
+
+  const branding = await getEmailBranding();
+
+  const data = {
     name,
     ticketId,
-    message,
-    attachments = [],
-    ticketUrl
-    }: {
-    to: string
-    name: string
-    ticketId: string
-    message: string
-    attachments?: any[]
-    ticketUrl: string
-    }) {
-    const templates = await getEmailTemplates();
-    const template = templates?.ticketReply;
-    if (!template) return;
+    message: message.trim().replace(/\n/g, '<br>'),
+    siteName: branding.siteName,
+    companyName: branding.companyName,
+    ticketUrl,
+  };
+  const subject = replaceEmailVariables(template.subject, data);
+  const header = replaceEmailVariables(template.header, data);
+  const footer = replaceEmailVariables(template.footer, data);
 
-    const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-    let siteName = "";
-    let companyName = "";
-    if (generalSettings && generalSettings.value) {
-      const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-      siteName = parsedSettings.siteName || "";
-      companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-    }
+  const { content: protectedContent, tokens } = protectBlockPlaceholders(template.content, [
+    "message",
+    "ticketUrl",
+  ]);
+  let content = replaceEmailVariables(protectedContent, data);
+  content = enhanceEmailContent(content);
+  content = injectBlocks(content, tokens, {
+    message: buildMessageCard(data.message, branding),
+    ticketUrl: buildCtaButton(ticketUrl, "View Ticket", branding, { icon: "&#127915;" }),
+  });
 
-    const data = { name, ticketId, message: message.trim().replace(/\n/g, '<br>'), siteName, companyName, ticketUrl };
-    const subject = replaceEmailVariables(template.subject, data);
-    const header = replaceEmailVariables(template.header, data);
-    const footer = replaceEmailVariables(template.footer, data);
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
-    let content = template.content; // Start with raw template content
-
-    // Apply styling to {{message}} placeholder
-    content = content.replace(
-      /\{\{message\}\}/g,
-      `<div style="border: 1px solid #e2e8f0; border-radius: 8px; background-color: #f8fafc; padding: 16px; margin: 16px 0;">{{message}}</div>`
-    );
-
-    // Apply styling to {{ticketUrl}} placeholder
-    content = content.replace(
-      /\{\{ticketUrl\}\}/g,
-      `<div style="text-align: center; margin: 20px 0;"><a href="{{ticketUrl}}" style="display: inline-block; padding: 12px 24px; font-size: 16px; color: #ffffff; background-color: #0d9488; border-radius: 8px; text-decoration: none;">View Ticket</a></div>`
-    );
-
-    // Now, replace all variables in the pre-styled content
-    content = replaceEmailVariables(content, data);
-    
-    // Convert newlines in the final content (from template parts that were not variables)
-    content = content.replace(/\n/g, '<br>');
-
-    const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
-
-    return sendEmail({ to, subject, html, attachments });
+  return sendEmail({ to, subject, html, attachments });
 }
 
 export async function createPolicyExpiryEmail(
@@ -452,30 +443,35 @@ export async function createPolicyExpiryEmail(
   const template = templates?.policyExpiry;
   if (!template) return { subject: "Error", html: "<body><p>Email template not found</p></body>" };
 
-  const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-  let siteName = "";
-  let companyName = "";
-  if (generalSettings && generalSettings.value) {
-    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-    siteName = parsedSettings.siteName || "";
-    companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-  }
+  const branding = await getEmailBranding();
 
-  const data = { firstName, lastName, policyNumber, vehicleDetails, endDate: new Date(expiresAt).toLocaleString(), renewalLink: policyDocumentLink, siteName, companyName };
+  const data = {
+    firstName,
+    lastName,
+    policyNumber,
+    vehicleDetails,
+    endDate: new Date(expiresAt).toLocaleString(),
+    renewalLink: policyDocumentLink,
+    siteName: branding.siteName,
+    companyName: branding.companyName,
+  };
   const subject = replaceEmailVariables(template.subject, data);
   const header = replaceEmailVariables(template.header, data);
   const footer = replaceEmailVariables(template.footer, data);
 
-  let content = replaceEmailVariables(template.content, data);
-  if (template.content.includes('{{renewalLink}}')) {
-      const buttonHtml = `<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" role=\"presentation\" style=\"margin: 20px auto;\"><tr><td align=\"center\" style=\"background-color: #0d9488; border-radius: 6px;\"><a href=\"${policyDocumentLink}\" target=\"_blank\" style=\"display: inline-block; color: white; text-decoration: none; padding: 12px 24px; font-weight: bold; border-radius: 6px; font-family: Arial, sans-serif; font-size: 16px;\">Get a New Order</a></td></tr></table>`;
-      content = content.replace(policyDocumentLink, buttonHtml);
-  }
+  const { content: protectedContent, tokens } = protectBlockPlaceholders(template.content, [
+    "renewalLink",
+    "policyDocumentLink",
+  ]);
+  let content = replaceEmailVariables(protectedContent, data);
+  content = enhanceEmailContent(content);
+  content = injectBlocks(content, tokens, {
+    renewalLink: buildCtaButton(policyDocumentLink, "Get a New Order", branding, { icon: "&#128260;" }),
+    policyDocumentLink: buildCtaButton(policyDocumentLink, "Get a New Order", branding, { icon: "&#128260;" }),
+  });
 
-  // Convert newlines in the final content (from template parts that were not variables)
-  content = content.replace(/\n/g, '<br>');
 
-  const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
   return { subject, html };
 }
@@ -484,26 +480,15 @@ export async function createDirectEmail(subject: string, message: string) {
   const templates = await getEmailTemplates();
   const template = templates?.directEmail;
   if (!template) return { subject: "Error", html: "<body><p>Email template not found</p></body>" };
+  const branding = await getEmailBranding();
 
-  const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, "general") });
-  let siteName = "";
-  let companyName = "";
-  if (generalSettings && generalSettings.value) {
-    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-    siteName = parsedSettings.siteName || "";
-    companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-  }
-
-  const data = { subject, message, siteName, companyName };
+  const data = { subject, message, siteName: branding.siteName, companyName: branding.companyName };
   const finalSubject = replaceEmailVariables(template.subject, data);
   const header = replaceEmailVariables(template.header, data);
-  let content = replaceEmailVariables(template.content, data);
+  const content = enhanceEmailContent(replaceEmailVariables(template.content, data));
   const footer = replaceEmailVariables(template.footer, data);
 
-  // Preserve newlines/paragraphs in direct messages by converting to <br>
-  content = content.replace(/\n/g, '<br>');
-  
-  const html = buildEmailHtml(siteName, companyName, finalSubject, header, content, footer, 'direct_email');
+  const html = buildEmailShell({ branding, subject: finalSubject, header, content, footer, emailFor: 'direct_email' });
 
   return { subject: finalSubject, html };
 }
@@ -524,29 +509,22 @@ export async function createOrderCancelEmail({
   const template = templates?.orderCancel;
   if (!template) return { subject: "Error", html: "<body><p>Email template not found</p></body>" };
 
-  const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-  let siteName = "";
-  let companyName = "";
-  if (generalSettings && generalSettings.value) {
-    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-    siteName = parsedSettings.siteName || "";
-    companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-  }
+  const branding = await getEmailBranding();
 
   const data = {
     firstName,
     lastName,
     policyNumber,
     reason: reason || 'No reason provided.',
-    siteName,
-    companyName,
+    siteName: branding.siteName,
+    companyName: branding.companyName,
   };
 
   const subject = replaceEmailVariables(template.subject, data);
   const header = replaceEmailVariables(template.header, data);
   const footer = replaceEmailVariables(template.footer, data);
-  const content = replaceEmailVariables(template.content, data).replace(/\n/g, '<br>');
-  const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
+  const content = enhanceEmailContent(replaceEmailVariables(template.content, data));
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
   return { subject, html };
 }
@@ -573,37 +551,28 @@ export async function createVerificationCodeEmail(firstName: string, code: strin
   const template = templates?.verificationCode;
   if (!template) return { subject: "Error", html: "<body><p>Email template not found</p></body>" };
 
-  const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-  let siteName = "";
-  let companyName = "";
-  if (generalSettings && generalSettings.value) {
-    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-    siteName = parsedSettings.siteName || "";
-    companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-  }
+  const branding = await getEmailBranding();
 
-  const data = { 
-    firstName: firstName || 'Customer', 
-    code, 
-    expiryMinutes, 
-    siteName, 
-    companyName 
+  const data = {
+    firstName: firstName || 'Customer',
+    code,
+    expiryMinutes,
+    siteName: branding.siteName,
+    companyName: branding.companyName
   };
 
   const subject = replaceEmailVariables(template.subject, data);
   const header = replaceEmailVariables(template.header, data);
   const footer = replaceEmailVariables(template.footer, data);
 
-  let content = replaceEmailVariables(template.content, data);
-  content = content.replace(
-      code, 
-      `<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" role=\"presentation\" style=\"margin: 15px auto;\"><tr><td style=\"background-color: #0d9488; color: white; padding: 15px 25px; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px;\">${code}</td></tr></table>`
-  );
+  const { content: protectedContent, tokens } = protectBlockPlaceholders(template.content, ["code"]);
+  let content = replaceEmailVariables(protectedContent, data);
+  content = enhanceEmailContent(content);
+  content = injectBlocks(content, tokens, {
+    code: buildCodeBox(code, branding),
+  });
 
-  // Convert newlines in the final content (from template parts that were not variables)
-  content = content.replace(/\n/g, '<br>');
-
-  const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
   return { subject, html };
 }
@@ -616,36 +585,25 @@ export async function createCustomerReplyEmail({
   ticketUrl,
 }: {
   ticketId: string;
-  ticketSubject:string;
+  ticketSubject: string;
   customerName: string;
   message: string;
   ticketUrl: string;
 }) {
-  const generalSettings = await db.query.settings.findFirst({ where: eq(settings.param, 'general') });
-  let siteName = "";
-  let companyName = "";
-  if (generalSettings && generalSettings.value) {
-    const parsedSettings = parseSettingValue<Record<string, any>>(generalSettings.value) || {};
-    siteName = parsedSettings.siteName || "Tempnow";
-    companyName = parsedSettings.companyName || "Tempnow Solutions Ltd";
-  }
+  const branding = await getEmailBranding();
 
   const subject = `New Customer Reply on Ticket #${ticketId}: ${ticketSubject}`;
   const header = `Ticket Reply: #${ticketId}`;
   const content = `
-    <p>A customer has replied to ticket #${ticketId} (${ticketSubject}).</p>
-    <p><strong>Customer:</strong> ${customerName}</p>
+   <p>A customer has replied to ticket #${escapeHtml(ticketId)} (${escapeHtml(ticketSubject)}).</p>
+    <p><strong>Customer:</strong> ${escapeHtml(customerName)}</p>
     <p><strong>Message:</strong></p>
-    <div style="border: 1px solid #e2e8f0; border-radius: 8px; background-color: #f8fafc; padding: 16px; margin: 16px 0;">
-      ${message.trim().replace(/\n/g, '<br>')}
-    </div>
-    <div style="text-align: center; margin: 20px 0;">
-        <a href="${ticketUrl}" style="display: inline-block; padding: 12px 24px; font-size: 16px; color: #ffffff; background-color: #0d9488; border-radius: 8px; text-decoration: none;">View Ticket</a>
-    </div>
+     ${buildMessageCard(escapeHtml(message).replace(/\n/g, '<br>'), branding)}
+    ${buildCtaButton(ticketUrl, "View Ticket", branding, { icon: "&#127915;" })}
   `;
   const footer = `This is an automated notification. Please do not reply directly to this email.`;
 
-  const html = buildEmailHtml(siteName, companyName, subject, header, content, footer);
+  const html = buildEmailShell({ branding, subject, header, content, footer });
 
   return { subject, html };
 }
