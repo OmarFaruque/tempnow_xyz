@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { quotes, users, settings } from '@/lib/schema';
 import { eq } from 'drizzle-orm';
 import { sendEmail, createInsurancePolicyEmail, shouldSuppressPdfAttachmentForDomain } from '@/lib/email';
-import { generateInvoicePdf } from '@/lib/invoice';
+import { generateInvoicePdf, isInvoicePaid } from '@/lib/invoice';
 import { revalidatePath } from 'next/cache';
 
 export async function POST(req: NextRequest) {
@@ -41,8 +41,25 @@ export async function POST(req: NextRequest) {
 
     // 2. Generate invoice
     const settingsData = await db.select().from(settings).where(eq(settings.param, 'general'));
-    const siteName = settingsData.length > 0 && settingsData[0].value.siteName ? settingsData[0].value.siteName : 'Tempnow';
-    const pdfBytes = await generateInvoicePdf(fullQuoteData, user, quote.policyNumber, siteName);
+    const generalSettings = settingsData.length > 0
+        ? (settingsData[0].value as unknown as Record<string, any> | null)
+        : null;
+    const siteName = generalSettings?.siteName ? generalSettings.siteName : 'Tempnow';
+
+    const pdfBytes = await generateInvoicePdf(fullQuoteData, user, quote.policyNumber, {
+      siteName,
+      generalSettings,
+      payment: {
+        paid: isInvoicePaid(quote.paymentStatus) || isInvoicePaid(quote.status),
+        status: quote.paymentStatus || quote.status,
+        method: quote.paymentMethod,
+        reference: quote.paymentIntentId || quote.spaymentId,
+        date: quote.paymentDate,
+        promoCode: quote.promoCode,
+        listAmount: parseFloat(quote.cpw || '') || null,
+        amount: finalAmount,
+      },
+    });
 
     // 3. Send confirmation email
     const emailData = await createInsurancePolicyEmail(

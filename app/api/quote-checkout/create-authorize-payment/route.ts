@@ -228,7 +228,25 @@ export async function POST(req: NextRequest) {
     const effectivePrice = (quote.updatePrice && quote.updatePrice !== 'false') ? quote.updatePrice : quote.cpw;
     const finalAmount = parseFloat(effectivePrice || quoteData.total);
 
-    const pdfBytes = await generateInvoicePdf({ ...quoteData, total: finalAmount, paymentDate: quote.paymentDate }, user, quote.policyNumber, siteName);
+    const pdfBytes = await generateInvoicePdf(
+      { ...quoteData, total: finalAmount, paymentDate: quote.paymentDate },
+      user,
+      quote.policyNumber,
+      {
+        siteName,
+        generalSettings,
+        payment: {
+          paid: true,
+          status: 'paid',
+          method: 'authorize',
+          reference: transactionId,
+          date: quote.paymentDate,
+          promoCode: quoteData.promoCode,
+          listAmount: parseFloat(quote.cpw || '') || null,
+          amount: finalAmount,
+        },
+      }
+    );
 
     const vehicle = quoteData.customerData.vehicle;
     const emailHtml = await createInsurancePolicyEmail(

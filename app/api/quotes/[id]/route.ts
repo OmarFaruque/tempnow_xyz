@@ -66,8 +66,22 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     fullQuoteData.total = finalAmount; // Ensure the invoice and email use the final amount
     fullQuoteData.paymentDate = quote.paymentDate; // Pass payment date to invoice generator
 
-    // 3. Generate invoice
-    const pdfBytes = await generateInvoicePdf(fullQuoteData, user, quote.policyNumber, siteName);
+    // 3. Generate invoice — paid in full with the gateway's reference so the
+    //    document can act as the customer's receipt.
+    const pdfBytes = await generateInvoicePdf(fullQuoteData, user, quote.policyNumber, {
+      siteName,
+      generalSettings,
+      payment: {
+        paid: true,
+        status: 'paid',
+        method: quote.paymentMethod || PaymentMethod,
+        reference: quote.paymentIntentId || PaymentIntentId || quote.spaymentId,
+        date: quote.paymentDate,
+        promoCode: quote.promoCode,
+        listAmount: parseFloat(quote.cpw || '') || null,
+        amount: finalAmount,
+      },
+    });
 
     // 4. Send confirmation email
     const vehicle = fullQuoteData.customerData.vehicle;
