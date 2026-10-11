@@ -1780,13 +1780,17 @@ export default function QuoteCheckoutPageWrapper() {
   const settings = useSettings();
   const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
 
-  const paymentProvider = settings?.paymentProvider?.activeProcessor;
+  // The router may allocate Stripe even when it is not the first provider in
+  // the order, so Elements is mounted whenever Stripe is configured at all -
+  // otherwise a Stripe-routed checkout would have no card form to mount.
+  const stripeConfigured = getConfiguredGatewayOrder(settings?.paymentProvider).includes('stripe')
+    || settings?.paymentProvider?.activeProcessor === 'stripe';
 
   useEffect(() => {
-    if (paymentProvider === 'stripe' && process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY) {
+    if (stripeConfigured && process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY) {
       setStripePromise(loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY));
     }
-  }, [paymentProvider, settings]);
+  }, [stripeConfigured, settings]);
 
   if (!settings) {
     return <Loading />;
@@ -1794,7 +1798,7 @@ export default function QuoteCheckoutPageWrapper() {
 
   const page = <DynamicQuoteCheckoutPage />;
 
-  if (paymentProvider === 'stripe' && stripePromise) {
+  if (stripeConfigured && stripePromise) {
     return <Elements stripe={stripePromise}>{page}</Elements>;
   }
 
