@@ -8,6 +8,42 @@ import { revalidatePath } from "next/cache";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const ROUTED_GATEWAYS = new Set(["stripe", "square", "airwallex", "authorizenet", "mollie", "paddle", "viva", "lemonsqueezy", "paypal", "checkoutcom"]);
+
+/**
+ * The payment rotation keeps its round counter (`quotaRound`) and usage window
+ * start (`quotaResetAt`) inside each gateway's settings row. The admin form
+ * saves the whole object it loaded earlier, so without this a save made after
+ * a round completed would roll the round back to a stale value and the
+ * rotation would restart incorrectly. Keep the newer reset time and the higher
+ * round; an explicit "Reset usage on save" still wins because its timestamp is
+ * the newest.
+ */
+function preserveRoutingState(incoming: any, storedRaw: string | null, key: string): any {
+  if (!ROUTED_GATEWAYS.has(key) || !incoming || typeof incoming !== "object" || Array.isArray(incoming)) return incoming
+  if (!storedRaw) return incoming
+  let stored: any
+  try {
+    stored = JSON.parse(storedRaw)
+  } catch {
+    return incoming
+  }
+  if (!stored || typeof stored !== "object") return incoming
+
+  const next = { ...incoming }
+  const storedRound = Number(stored.quotaRound)
+  const incomingRound = Number(next.quotaRound)
+  if (Number.isSafeInteger(storedRound) && storedRound > (Number.isSafeInteger(incomingRound) ? incomingRound : 0)) {
+    next.quotaRound = storedRound
+  }
+  const storedReset = Date.parse(stored.quotaResetAt)
+  const incomingReset = Date.parse(next.quotaResetAt)
+  if (!Number.isNaN(storedReset) && (Number.isNaN(incomingReset) || storedReset > incomingReset)) {
+    next.quotaResetAt = stored.quotaResetAt
+  }
+  return next
+}
+
 export async function GET(request: NextRequest) {
   try {
     const settingsFromDb = await db.select().from(settingsTable);
@@ -68,12 +104,15 @@ export async function POST(request: NextRequest) {
     await db.transaction(async (tx) => {
       for (const key in settings) {
         if (Object.prototype.hasOwnProperty.call(settings, key)) {
-          const value = JSON.stringify(settings[key]);
           const existing = await tx
             .select()
             .from(settingsTable)
             .where(eq(settingsTable.param, key))
             .limit(1);
+
+          const value = JSON.stringify(
+            preserveRoutingState(settings[key], existing[0]?.value ?? null, key),
+          );
 
           if (existing.length > 0) {
             await tx

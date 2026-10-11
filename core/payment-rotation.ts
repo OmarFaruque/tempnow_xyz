@@ -399,7 +399,7 @@ async function resetQuotaRound(
           )::text
           WHERE param = ${gateway}
             AND value IS NOT NULL
-            AND value ~ '^[[:space:]]*\\{'
+            AND value ~ '^[[:space:]]*[{]'
         `
     }
 }
