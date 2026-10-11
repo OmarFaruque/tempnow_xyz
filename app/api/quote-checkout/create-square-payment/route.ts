@@ -8,10 +8,14 @@ import { getSettings } from '@/lib/database';
 import { sendEmail, createInsurancePolicyEmail, shouldSuppressPdfAttachmentForDomain } from '@/lib/email';
 import { generateInvoicePdf } from '@/lib/invoice';
 import { revalidatePath } from 'next/cache';
+import { verifyOwnedPaymentAttempt } from '@/core/payment-auth';
+import { markPaymentGatewayAttempt, recordPaymentGatewayAttemptError } from '@/core/payment-rotation';
 
 export async function POST(req: NextRequest) {
   // Store original toJSON if it exists to avoid side-effects
   const originalToJSON = (BigInt.prototype as any).toJSON;
+  // Declared outside the try so error paths can still attribute the failure.
+  let gatewayAttemptId = '';
 
   try {
     // Temporarily modify BigInt serialization to Number for this request
@@ -38,16 +42,44 @@ export async function POST(req: NextRequest) {
       token: accessToken,
     });
 
-    const { sourceId, verificationToken, quoteData, user, flp_checksum } = await req.json();
+    const { sourceId, verificationToken, quoteData, user, flp_checksum, gatewayAttemptId: bodyGatewayAttemptId } = await req.json();
+    gatewayAttemptId = typeof bodyGatewayAttemptId === 'string' ? bodyGatewayAttemptId : '';
 
 
     if (!sourceId || !quoteData || !user || !quoteData.id) {
       return NextResponse.json({ success: false, details: "Missing required payment information or quote ID." }, { status: 400 });
     }
 
+    // The rotation ledger decides which provider may charge this checkout. A
+    // Square charge is only accepted for the attempt Square was routed, so a
+    // card form that is open in another tab (or a stale page) can never charge
+    // a provider whose quota the router already spent.
+    if (typeof gatewayAttemptId !== 'string' || !gatewayAttemptId) {
+      return NextResponse.json({ success: false, code: 'payment_attempt_missing', details: 'This checkout has no routed payment attempt. Please reload the checkout page.' }, { status: 409 });
+    }
+
+    const routed = await verifyOwnedPaymentAttempt({
+      request: req,
+      attemptId: gatewayAttemptId,
+      gateway: 'square',
+      product: 'quote',
+      checkoutId: `quote:${quoteData.id}`,
+    });
+    if (!routed) {
+      return NextResponse.json({
+        success: false,
+        code: 'payment_attempt_unavailable',
+        details: 'This payment attempt is no longer available. Please reload the checkout page to continue with the next provider.',
+      }, { status: 409 });
+    }
+
     const amount = quoteData.total || 0;
     if (amount <= 0) {
-      return NextResponse.json({ success: false, details: "Payment amount must be positive." }, { status: 400 });
+      await markPaymentGatewayAttempt(gatewayAttemptId, 'failed', {
+        failureCode: 'square_invalid_amount',
+        failureMessage: 'The checkout total was zero or missing.',
+      });
+      return NextResponse.json({ success: false, code: 'square_invalid_amount', details: "Payment amount must be positive." }, { status: 400 });
     }
 
     const totalAmount = BigInt(Math.round(amount * 100));
@@ -170,7 +202,11 @@ export async function POST(req: NextRequest) {
 
         const failOpen = fraudSettings?.failOpen !== undefined ? !!fraudSettings.failOpen : true;
         if (action === "block" || (action === "error" && !failOpen)) {
-          return NextResponse.json({ success: false, details: "Transaction blocked due to suspected fraud." }, { status: 403 });
+          await recordPaymentGatewayAttemptError(gatewayAttemptId, {
+            failureCode: 'fraud_blocked',
+            failureMessage: `FraudLabsPro blocked this customer at checkout (score ${score ?? 'n/a'}).`,
+          });
+          return NextResponse.json({ success: false, code: 'fraud_blocked', details: "Transaction blocked due to suspected fraud." }, { status: 403 });
         }
       }
     } catch (fErr) {
@@ -192,19 +228,36 @@ export async function POST(req: NextRequest) {
       currency = parsedSettings.currency || "GBP";
     }
 
-    const paymentResult = await squareClient.payments.create({
-      sourceId,
-      verificationToken,
-      idempotencyKey: randomUUID(),
-      locationId: appLocationId,
-      amountMoney: {
-        amount: totalAmount,
-        currency: currency,
-      },
-      note: `${siteName} Docs: Policy ${quoteData.id}`,
-    });
+    // Keep the attempt marked as "in flight" while Square is contacted so the
+    // quota slot is not handed to another checkout mid-charge.
+    await markPaymentGatewayAttempt(gatewayAttemptId, 'pending');
+
+    let paymentResult;
+    try {
+      paymentResult = await squareClient.payments.create({
+        sourceId,
+        verificationToken,
+        idempotencyKey: randomUUID(),
+        locationId: appLocationId,
+        amountMoney: {
+          amount: totalAmount,
+          currency: currency,
+        },
+        note: `${siteName} Docs: Policy ${quoteData.id}`,
+      });
+    } catch (squareError: any) {
+      const firstError = Array.isArray(squareError?.errors) ? squareError.errors[0] : null;
+      const failureCode = String(firstError?.code || squareError?.code || 'square_payment_failed');
+      const failureMessage = String(
+        firstError?.detail || squareError?.detail || squareError?.message || 'Square declined this payment.'
+      );
+      await markPaymentGatewayAttempt(gatewayAttemptId, 'failed', { failureCode, failureMessage });
+      console.error(`Square payment failed for quote ${quoteData.id} (attempt ${gatewayAttemptId}):`, failureMessage, squareError?.errors || squareError);
+      return NextResponse.json({ success: false, code: failureCode, details: failureMessage, rawError: squareError?.errors || squareError }, { status: 402 });
+    }
 
     if (paymentResult.payment) {
+      await markPaymentGatewayAttempt(gatewayAttemptId, 'succeeded', { providerReference: paymentResult.payment.id });
       // Update database
       await db.update(quotes).set({
         paymentStatus: 'paid',
@@ -222,6 +275,10 @@ export async function POST(req: NextRequest) {
       revalidatePath('/administrator');
       revalidatePath('/api/admin/quotes');
 
+      // Everything below is post-payment paperwork. The card has already been
+      // charged, so a failure here must never turn into a "payment failed"
+      // answer (the customer would be told to pay again).
+      try {
       // Fetch the updated quote to get the policy number
       const quoteRecord = await db.select().from(quotes).where(eq(quotes.id, quoteData.id)).limit(1);
       if (!quoteRecord.length) {
@@ -294,9 +351,23 @@ export async function POST(req: NextRequest) {
       }
 
       await db.update(quotes).set({ mailSent: true }).where(eq(quotes.id, quoteData.id));
+      } catch (fulfilmentError) {
+        // The charge stands; the order is paid in the database and support can
+        // re-send the documents. Reported as a warning, not as a failure.
+        console.error(`Square payment ${paymentResult.payment.id} succeeded but post-payment fulfilment failed for quote ${quoteData.id}:`, fulfilmentError);
+      }
+
+      return NextResponse.json({ success: true, payment: paymentResult.payment });
     }
 
-    return NextResponse.json({ success: true, payment: paymentResult.payment });
+    // Square answered without a payment and without an error: nothing was
+    // charged, so release the quota slot instead of reporting a false success.
+    const incompleteMessage = 'Square did not return a completed payment.';
+    await markPaymentGatewayAttempt(gatewayAttemptId, 'failed', {
+      failureCode: 'square_payment_incomplete',
+      failureMessage: incompleteMessage,
+    });
+    return NextResponse.json({ success: false, code: 'square_payment_incomplete', details: incompleteMessage }, { status: 402 });
   } catch (error: any) {
     console.error('Square payment error full object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
 
@@ -309,7 +380,17 @@ export async function POST(req: NextRequest) {
       errorMessage = error.message;
     }
 
-    return NextResponse.json({ success: false, details: errorMessage, rawError: error?.errors || error }, { status: 500 });
+    // The charge may or may not have happened, so the attempt is left open and
+    // the reason is stored for the operator instead of being reported as a
+    // clean decline.
+    if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+      await recordPaymentGatewayAttemptError(gatewayAttemptId, {
+        failureCode: 'square_unexpected_error',
+        failureMessage: errorMessage,
+      }).catch(() => {});
+    }
+
+    return NextResponse.json({ success: false, code: 'square_unexpected_error', details: errorMessage, rawError: error?.errors || error }, { status: 500 });
   } finally {
     // Restore original toJSON to prevent side-effects
     (BigInt.prototype as any).toJSON = originalToJSON;

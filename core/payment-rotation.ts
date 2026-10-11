@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { sql } from '@/core/db-raw'
 import { fetchSetting } from '@/core/data-store'
 import {
+    getConfiguredGatewayOrder,
     getProductGatewayOrder,
     getRetryLimit,
     PAYMENT_GATEWAYS,
@@ -45,6 +46,40 @@ export interface PublicGatewayAttempt {
     status: GatewayAttemptStatus
 }
 
+/** Operator-facing view of one routed payment attempt (Ops Hub diagnostics). */
+export interface PaymentGatewayAttemptDiagnostic {
+    id: string
+    checkoutId: string
+    product: PaymentProduct
+    gateway: PaymentGatewayId
+    attemptNumber: number
+    status: GatewayAttemptStatus
+    providerReference: string | null
+    failureCode: string | null
+    failureMessage: string | null
+    createdAt: string
+    updatedAt: string
+    expiresAt: string
+    expired: boolean
+}
+
+/**
+ * Why the router picked the provider it did. Attached to allocation responses
+ * for signed-in administrators and written to the server log for everyone, so
+ * "why is it always Square?" is answerable without reading the database.
+ */
+export interface RoutingDebugInfo {
+    order: PaymentGatewayId[]
+    previouslyTried: string[]
+    states: Record<string, ProviderQuotaState>
+    roundReset: boolean
+    resetGateways: string[]
+    outcome: string
+    selected: string | null
+    attemptNumber: number
+    round: number
+}
+
 export class PaymentRoutingError extends Error {
     constructor(
         message: string,
@@ -73,6 +108,37 @@ type DbAttempt = {
     provider_reference: string | null
     created_at: string | Date
     expires_at: string | Date
+}
+
+type DbAttemptDiagnostic = DbAttempt & {
+    failure_code: string | null
+    failure_message: string | null
+    updated_at: string | Date
+}
+
+/** Structured server log so a failed/odd routing decision can be traced. */
+export function logPaymentRouting(event: string, payload: Record<string, unknown>): void {
+    try {
+        console.info(`[payment-routing] ${event} ${JSON.stringify(payload)}`)
+    } catch {
+        console.info(`[payment-routing] ${event}`)
+    }
+}
+
+export function summarizeRotationStates(
+    states: Record<string, ProviderQuotaState>,
+): Record<string, { quota: number; used: number; autoPaused: boolean; customerCooldown: boolean }> {
+    return Object.fromEntries(
+        Object.entries(states).map(([gateway, state]) => [
+            gateway,
+            {
+                quota: state.quota,
+                used: state.used,
+                autoPaused: state.autoPaused,
+                customerCooldown: state.customerCooldown,
+            },
+        ]),
+    )
 }
 
 function toIso(value: string | Date): string {
@@ -170,6 +236,7 @@ export function ensurePaymentGatewayAttemptsTable(): Promise<void> {
                     "status" varchar(24) DEFAULT 'reserved' NOT NULL,
                     "provider_reference" text,
                     "failure_code" varchar(100),
+                    "failure_message" text,
                     "created_at" timestamp with time zone DEFAULT now() NOT NULL,
                     "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
                     "expires_at" timestamp with time zone NOT NULL,
@@ -190,6 +257,12 @@ export function ensurePaymentGatewayAttemptsTable(): Promise<void> {
             await sql`
                 CREATE INDEX IF NOT EXISTS "payment_gateway_attempts_customer_gateway_idx"
                 ON "payment_gateway_attempts" ("customer_key", "gateway", "created_at")
+            `
+            // Deployments created before the diagnostics column existed keep
+            // their ledger; the failure reason is simply added in place.
+            await sql`
+                ALTER TABLE "payment_gateway_attempts"
+                ADD COLUMN IF NOT EXISTS "failure_message" text
             `
         })().catch((error) => {
             attemptsTablePromise = null
@@ -349,7 +422,7 @@ function validateAllocationInput(input: AllocationInput): void {
 async function allocateNextForCustomer(
     input: AllocationInput,
     customerKey: string,
-): Promise<{ attempt: PaymentGatewayAttempt; maxRetries: number }> {
+): Promise<{ attempt: PaymentGatewayAttempt; maxRetries: number; debug: RoutingDebugInfo }> {
     validateAllocationInput(input)
     const paymentSettings = await getPaymentSettings()
     const order = getProductGatewayOrder(paymentSettings, input.product)
@@ -391,7 +464,31 @@ async function allocateNextForCustomer(
       ORDER BY attempt_number DESC
       LIMIT 1
     `
-        if (activeRows[0]) return activeRows[0]
+        if (activeRows[0]) {
+            // The customer reloaded checkout while their reservation is still
+            // live: hand back the same provider instead of burning another
+            // quota slot.
+            logPaymentRouting('reused-reservation', {
+                checkoutId: input.checkoutId,
+                product: input.product,
+                gateway: activeRows[0].gateway,
+                attemptNumber: activeRows[0].attempt_number,
+            })
+            return {
+                attempt: activeRows[0],
+                debug: {
+                    order,
+                    previouslyTried: [],
+                    states: {},
+                    roundReset: false,
+                    resetGateways: [],
+                    outcome: 'reused-reservation',
+                    selected: activeRows[0].gateway,
+                    attemptNumber: activeRows[0].attempt_number,
+                    round: Number(providerConfigs.get(activeRows[0].gateway)?.quotaRound ?? 0),
+                } satisfies RoutingDebugInfo,
+            }
+        }
 
         const existingRows = await transaction<DbAttempt[]>`
       SELECT id, checkout_id, product, gateway, customer_key, attempt_number,
@@ -427,12 +524,14 @@ async function allocateNextForCustomer(
         }
 
         let decision = selectNextGateway(order, previouslyTried, states)
+        let roundReset = false
+        let resetGateways: PaymentGatewayId[] = []
 
         if (decision.outcome === 'start-new-round') {
             // Every provider with a finite quota finished its round. Roll the
             // quota windows over and route the next payment to the first
             // provider in operator order again.
-            const resetGateways = gatewaysForRoundReset(order, states)
+            resetGateways = gatewaysForRoundReset(order, states)
             await resetQuotaRound(transaction, resetGateways)
             for (const gateway of resetGateways) {
                 // The quota window restarted, so only live reservations still
@@ -443,6 +542,14 @@ async function allocateNextForCustomer(
                 }
             }
             decision = selectNextGateway(order, previouslyTried, states)
+            roundReset = true
+            logPaymentRouting('round-complete', {
+                checkoutId: input.checkoutId,
+                product: input.product,
+                resetGateways,
+                newRound: states[resetGateways[0]] ? Number(providerConfigs.get(resetGateways[0])?.quotaRound ?? 0) + 1 : null,
+                states: summarizeRotationStates(states),
+            })
         }
 
         if (decision.outcome === 'start-new-round') {
@@ -452,6 +559,18 @@ async function allocateNextForCustomer(
             throw new PaymentRoutingError(unavailableMessage(decision.reason), 'NO_GATEWAY_AVAILABLE')
         }
 
+        const selectedRound = Number(providerConfigs.get(decision.gateway as PaymentGatewayId)?.quotaRound ?? 0)
+
+        logPaymentRouting('allocated', {
+            checkoutId: input.checkoutId,
+            product: input.product,
+            attemptNumber: nextAttemptNumber,
+            gateway: decision.gateway,
+            order,
+            previouslyTried: [...previouslyTried],
+            roundReset,
+            states: summarizeRotationStates(states),
+        })
 
         const id = randomUUID()
         const inserted = await transaction<DbAttempt[]>`
@@ -466,15 +585,29 @@ async function allocateNextForCustomer(
         RETURNING id, checkout_id, product, gateway, customer_key, attempt_number,
         status, provider_reference, created_at, expires_at
             `
-        return inserted[0]
+        return {
+            attempt: inserted[0],
+            debug: {
+                order,
+                previouslyTried: [...previouslyTried],
+                states: summarizeRotationStates(states),
+                roundReset,
+                resetGateways,
+                outcome: decision.outcome,
+                selected: decision.gateway,
+                attemptNumber: nextAttemptNumber,
+                round: Number.isSafeInteger(selectedRound) ? selectedRound : 0,
+            } satisfies RoutingDebugInfo,
+        }
     })
 
-    return { attempt: mapAttempt(attempt), maxRetries }
+    return { attempt: mapAttempt(attempt.attempt), maxRetries, debug: attempt.debug }
 }
 
 export async function reserveNextPaymentGateway(input: AllocationInput): Promise<{
     attempt: PublicGatewayAttempt
     maxRetries: number
+    debug: RoutingDebugInfo
 }> {
     const customerKey = hashCustomerKey(input.customerId, input.customerEmail)
     const result = await withPaymentAttemptsTable(() => allocateNextForCustomer(input, customerKey))
@@ -490,7 +623,9 @@ export async function reserveNextPaymentGateway(input: AllocationInput): Promise
             provider_reference: result.attempt.providerReference,
             created_at: result.attempt.createdAt,
             expires_at: result.attempt.expiresAt,
-        }, result.maxRetries), maxRetries: result.maxRetries
+        }, result.maxRetries),
+        maxRetries: result.maxRetries,
+        debug: result.debug,
     }
 }
 
@@ -540,11 +675,20 @@ export async function verifyPaymentGatewayAttempt(
 export async function markPaymentGatewayAttempt(
     attemptId: string,
     status: 'pending' | 'failed' | 'succeeded',
-    details: { providerReference?: string | null; failureCode?: string | null } = {},
+    details: { providerReference?: string | null; failureCode?: string | null; failureMessage?: string | null } = {},
 ): Promise<void> {
     if (!attemptId || !/^[0-9a-f-]{36}$/i.test(attemptId)) return
+    if (status !== 'pending' && (details.failureCode || details.failureMessage)) {
+        logPaymentRouting('attempt-outcome', {
+            attemptId,
+            status,
+            failureCode: details.failureCode ?? null,
+            failureMessage: details.failureMessage ?? null,
+        })
+    }
     const providerReference = details.providerReference?.slice(0, 500) ?? null
     const failureCode = details.failureCode?.replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 100) ?? null
+    const failureMessage = details.failureMessage?.slice(0, 1000) ?? null
 
     await withPaymentAttemptsTable(async () => {
         if (status === 'succeeded') {
@@ -553,6 +697,7 @@ export async function markPaymentGatewayAttempt(
       SET status = 'succeeded',
         provider_reference = COALESCE(${providerReference}, provider_reference),
         failure_code = NULL,
+        failure_message = NULL,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ${attemptId}:: uuid
         AND status <> 'succeeded'
@@ -566,6 +711,7 @@ export async function markPaymentGatewayAttempt(
       SET status = 'failed',
         provider_reference = COALESCE(${providerReference}, provider_reference),
         failure_code = COALESCE(${failureCode}, failure_code),
+        failure_message = COALESCE(${failureMessage}, failure_message),
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ${attemptId}:: uuid
         AND status NOT IN('succeeded', 'failed')
@@ -588,7 +734,8 @@ export async function retryPaymentGatewayAttempt(
     attemptId: string,
     failureCode: string,
     customer: { id: string | number; email?: string | null },
-): Promise<{ attempt: PublicGatewayAttempt; maxRetries: number }> {
+    failureMessage?: string | null,
+): Promise<{ attempt: PublicGatewayAttempt; maxRetries: number; debug: RoutingDebugInfo }> {
     const previous = await getPaymentGatewayAttempt(attemptId)
     if (!previous) throw new PaymentRoutingError('Payment attempt was not found.', 'ATTEMPT_NOT_FOUND')
     if (!(await isPaymentGatewayAttemptOwnedByCustomer(attemptId, customer.id, customer.email))) {
@@ -598,7 +745,15 @@ export async function retryPaymentGatewayAttempt(
         throw new PaymentRoutingError('This checkout has already been paid.', 'PAYMENT_ALREADY_COMPLETE')
     }
 
-    await markPaymentGatewayAttempt(attemptId, 'failed', { failureCode })
+    logPaymentRouting('retry', {
+        attemptId,
+        checkoutId: previous.checkoutId,
+        fromGateway: previous.gateway,
+        failureCode,
+        failureMessage: failureMessage ?? null,
+    })
+
+    await markPaymentGatewayAttempt(attemptId, 'failed', { failureCode, failureMessage })
 
     const paymentSettings = await getPaymentSettings()
     const maxRetries = getRetryLimit(paymentSettings)
@@ -622,7 +777,41 @@ export async function retryPaymentGatewayAttempt(
             expires_at: next.attempt.expiresAt,
         }, maxRetries),
         maxRetries,
+        debug: next.debug,
     }
+}
+
+/**
+ * Record a provider error on an attempt without changing the routing state.
+ *
+ * Used for non-fatal observations - a Paddle overlay error, a declined Square
+ * tokenisation, a Stripe element error - so the operator can see *why* a
+ * customer struggled while the attempt stays payable (and a later success can
+ * still overwrite the note).
+ */
+export async function recordPaymentGatewayAttemptError(
+    attemptId: string,
+    details: { failureCode?: string | null; failureMessage?: string | null } = {},
+): Promise<boolean> {
+    if (!attemptId || !/^[0-9a-f-]{36}$/i.test(attemptId)) return false
+    const failureCode = details.failureCode?.replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 100) ?? null
+    const failureMessage = details.failureMessage?.slice(0, 1000) ?? null
+    if (!failureCode && !failureMessage) return false
+
+    logPaymentRouting('provider-error', { attemptId, failureCode, failureMessage })
+
+    return withPaymentAttemptsTable(async () => {
+        const rows = await sql<{ id: string }[]>`
+      UPDATE payment_gateway_attempts
+      SET failure_code = COALESCE(${failureCode}, failure_code),
+          failure_message = COALESCE(${failureMessage}, failure_message),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${attemptId}::uuid
+        AND status IN ('reserved', 'pending')
+      RETURNING id
+        `
+        return rows.length > 0
+    })
 }
 
 async function readStoredCustomerKey(attemptId: string): Promise<string | null> {
@@ -746,4 +935,64 @@ export async function getPaymentGatewayStats(): Promise<Array<{
     )
 
     return result
+}
+/** Recent attempts with their failure reasons, for the Ops Hub diagnostics list. */
+export async function getRecentPaymentGatewayAttempts(
+    limit = 50,
+    gateway: PaymentGatewayId | null = null,
+): Promise<PaymentGatewayAttemptDiagnostic[]> {
+    await ensurePaymentGatewayAttemptsTable()
+    const safeLimit = Math.min(200, Math.max(1, Number.isSafeInteger(limit) ? limit : 50))
+    const rows = await sql<DbAttemptDiagnostic[]>`
+      SELECT id, checkout_id, product, gateway, customer_key, attempt_number,
+             status, provider_reference, failure_code, failure_message,
+             created_at, updated_at, expires_at
+      FROM payment_gateway_attempts
+      WHERE (${gateway}::text IS NULL OR gateway = ${gateway})
+      ORDER BY created_at DESC
+      LIMIT ${safeLimit}
+    `
+    const now = Date.now()
+    return rows.map((row) => ({
+        id: row.id,
+        checkoutId: row.checkout_id,
+        product: row.product,
+        gateway: row.gateway,
+        attemptNumber: row.attempt_number,
+        status: row.status,
+        providerReference: row.provider_reference,
+        failureCode: row.failure_code ?? null,
+        failureMessage: row.failure_message ?? null,
+        createdAt: toIso(row.created_at),
+        updatedAt: toIso(row.updated_at),
+        expiresAt: toIso(row.expires_at),
+        expired: ['reserved', 'pending'].includes(row.status) && Date.parse(toIso(row.expires_at)) <= now,
+    }))
+}
+
+/**
+ * Operator-triggered round reset ("delete the record so the rotation starts
+ * from the first gateway again"). Clears the usage window of every gateway with
+ * a configured quota and bumps its visible round counter.
+ */
+export async function resetPaymentQuotaRounds(): Promise<{ resetGateways: PaymentGatewayId[]; order: PaymentGatewayId[] }> {
+    const paymentSettings = await getPaymentSettings()
+    const order = getConfiguredGatewayOrder(paymentSettings)
+    if (order.length === 0) return { resetGateways: [], order }
+
+    const resetGateways: PaymentGatewayId[] = []
+    for (const gateway of order) {
+        const providerSettings = await fetchSetting(gateway)
+        if (asNonNegativeInteger(providerSettings?.paymentQuota, 0) > 0) resetGateways.push(gateway)
+    }
+
+    if (resetGateways.length > 0) {
+        // Only the usage window is rolled over: reservations that belong to
+        // checkouts still in flight keep their slot, exactly like the automatic
+        // end-of-round reset.
+        await resetQuotaRound(sql as unknown as RotationExecutor, resetGateways)
+    }
+
+    logPaymentRouting('manual-round-reset', { order, resetGateways })
+    return { resetGateways, order }
 }

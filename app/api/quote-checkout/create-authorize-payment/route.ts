@@ -6,11 +6,15 @@ import { getSettings } from '@/lib/database';
 import { sendEmail, createInsurancePolicyEmail, shouldSuppressPdfAttachmentForDomain } from '@/lib/email';
 import { generateInvoicePdf } from '@/lib/invoice';
 import { revalidatePath } from 'next/cache';
+import { verifyOwnedPaymentAttempt } from '@/core/payment-auth';
+import { markPaymentGatewayAttempt, recordPaymentGatewayAttemptError } from '@/core/payment-rotation';
 
 const AUTHORIZE_API_URL = 'https://api2.authorize.net/xml/v1/request.api';
 const AUTHORIZE_SANDBOX_API_URL = 'https://apitest.authorize.net/xml/v1/request.api';
 
 export async function POST(req: NextRequest) {
+  // Declared outside the try so error paths can still attribute the failure.
+  let gatewayAttemptId = '';
   try {
     const authorizeSettingsRecord = await db.select().from(settings).where(eq(settings.param, 'authorizenet')).limit(1);
 
@@ -35,7 +39,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, details: `Authorize.Net ${isLive ? 'live' : 'sandbox'} credentials are not configured.` }, { status: 500 });
     }
 
-    const { quoteData, user, opaqueData, flp_checksum } = await req.json();
+    const { quoteData, user, opaqueData, flp_checksum, gatewayAttemptId: bodyGatewayAttemptId } = await req.json();
+    gatewayAttemptId = typeof bodyGatewayAttemptId === 'string' ? bodyGatewayAttemptId : '';
 
     if (!quoteData || !quoteData.id || !user || !opaqueData) {
       return NextResponse.json({ success: false, details: 'Missing required payment information.' }, { status: 400 });
@@ -48,6 +53,25 @@ export async function POST(req: NextRequest) {
 
     if (!opaqueData.dataDescriptor || !opaqueData.dataValue) {
       return NextResponse.json({ success: false, details: 'Invalid payment token.' }, { status: 400 });
+    }
+
+    // Only the provider the router allocated may charge this checkout.
+    if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+      const routed = await verifyOwnedPaymentAttempt({
+        request: req,
+        attemptId: gatewayAttemptId,
+        gateway: 'authorizenet',
+        product: 'quote',
+        checkoutId: `quote:${quoteData.id}`,
+      });
+      if (!routed) {
+        return NextResponse.json({
+          success: false,
+          code: 'payment_attempt_unavailable',
+          details: 'This payment attempt is no longer available. Please reload the checkout page.',
+        }, { status: 409 });
+      }
+      await markPaymentGatewayAttempt(gatewayAttemptId, 'pending');
     }
 
     try {
@@ -200,10 +224,17 @@ export async function POST(req: NextRequest) {
 
     if (!isSuccess) {
       const errorText = transactionResponse?.errors?.[0]?.errorText || gatewayData?.messages?.message?.[0]?.text || 'Authorize.Net payment failed.';
-      return NextResponse.json({ success: false, details: errorText }, { status: 400 });
+      const failureCode = String(transactionResponse?.errors?.[0]?.errorCode || 'authorizenet_declined');
+      if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+        await markPaymentGatewayAttempt(gatewayAttemptId, 'failed', { failureCode, failureMessage: errorText });
+      }
+      return NextResponse.json({ success: false, code: failureCode, details: errorText }, { status: 402 });
     }
 
     const transactionId = transactionResponse?.transId;
+    if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+      await markPaymentGatewayAttempt(gatewayAttemptId, 'succeeded', { providerReference: transactionId ?? null });
+    }
 
     await db.update(quotes).set({
       paymentStatus: 'paid',
@@ -282,6 +313,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, transactionId, currency });
   } catch (error: any) {
     console.error('Authorize.Net payment error:', error);
-    return NextResponse.json({ success: false, details: error?.message || 'An unexpected error occurred during payment.' }, { status: 500 });
+    if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+      await markPaymentGatewayAttempt(gatewayAttemptId, 'failed', {
+        failureCode: 'authorizenet_error',
+        failureMessage: error?.message || 'An unexpected error occurred during payment.',
+      }).catch(() => {});
+    }
+    return NextResponse.json({ success: false, code: 'authorizenet_error', details: error?.message || 'An unexpected error occurred during payment.' }, { status: 500 });
   }
 }

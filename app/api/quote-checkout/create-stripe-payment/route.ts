@@ -7,12 +7,33 @@ import { settings } from "@/lib/schema";
 import { revalidatePath } from "next/cache";
 import { getSettings } from "@/lib/database";
 import {parseSettingsValue} from "@/lib/utils";
+import { verifyOwnedPaymentAttempt } from "@/core/payment-auth";
+import { markPaymentGatewayAttempt, recordPaymentGatewayAttemptError } from "@/core/payment-rotation";
 
 export async function POST(req: NextRequest) {
-      const { quoteData, user, flp_checksum, radar_session_id } = await req.json();
+      const { quoteData, user, flp_checksum, radar_session_id, gatewayAttemptId } = await req.json();
   
       if (!quoteData) {
           return NextResponse.json({ error: "Quote data is required." }, { status: 400 });
+      }
+
+      // When the checkout page sends the routed attempt, the intent may only be
+      // created for the provider the router allocated. Flows that still post
+      // without an attempt (Apple Pay) keep working unchanged.
+      if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+          const routed = await verifyOwnedPaymentAttempt({
+              request: req,
+              attemptId: gatewayAttemptId,
+              gateway: 'stripe',
+              product: 'quote',
+              checkoutId: `quote:${quoteData.id}`,
+          });
+          if (!routed) {
+              return NextResponse.json({
+                  error: 'This payment attempt is no longer available.',
+                  code: 'payment_attempt_unavailable',
+              }, { status: 409 });
+          }
       }
   
       try {
@@ -182,12 +203,22 @@ export async function POST(req: NextRequest) {
         // Decide whether to block on provider errors depending on admin setting
         const failOpen = fraudSettings?.failOpen !== undefined ? !!fraudSettings.failOpen : true;
         if (action === "block" || (action === "error" && !failOpen)) {
-          return NextResponse.json({ error: "Transaction blocked due to suspected fraud." }, { status: 403 });
+          if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+              await recordPaymentGatewayAttemptError(gatewayAttemptId, {
+                  failureCode: 'fraud_blocked',
+                  failureMessage: 'FraudLabsPro blocked this customer at checkout.',
+              });
+          }
+          return NextResponse.json({ error: "Transaction blocked due to suspected fraud.", code: 'fraud_blocked' }, { status: 403 });
         }
       }
     } catch (fraudError) {
       console.error("FraudLabsPro check failed:", fraudError);
       // Continue with payment creation on fraud check failure (fail-open)
+    }
+
+    if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+        await markPaymentGatewayAttempt(gatewayAttemptId, 'pending');
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
@@ -227,6 +258,12 @@ export async function POST(req: NextRequest) {
     if (error instanceof Error) {
       errorMessage = error.message;
     }
-    return NextResponse.json({ error: "Failed to create Stripe payment intent.", details: errorMessage }, { status: 500 });
+    if (typeof gatewayAttemptId === 'string' && gatewayAttemptId) {
+      await markPaymentGatewayAttempt(gatewayAttemptId, 'failed', {
+        failureCode: 'stripe_intent_failed',
+        failureMessage: errorMessage,
+      }).catch(() => {});
+    }
+    return NextResponse.json({ error: "Failed to create Stripe payment intent.", details: errorMessage, code: 'stripe_intent_failed' }, { status: 500 });
   }
 }
