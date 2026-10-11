@@ -23,6 +23,17 @@ import Cookies from 'js-cookie';
 import { Label } from '@/components/ui/label';
 import { getConfiguredGatewayOrder, getGatewayDisplayName, type PaymentGatewayId } from '@/core/payment-gateways';
 
+type GatewayRoutingTrace = {
+  order: string[];
+  tried: string[];
+  skipped: Array<{ gateway: string; reason: string; detail: string }>;
+  reusedReservation: boolean;
+  newRound: boolean;
+  states: Record<string, { quota: number; used: number; autoPaused: boolean; customerCooldown: boolean }>;
+};
+
+type GatewayDebugEntry = { at: string; event: string; data?: unknown };
+
 type PublicGatewayAttempt = {
   id: string;
   checkoutId: string;
@@ -531,6 +542,10 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
     const attemptKey = gatewayAttemptId || 'unattributed';
     if (failureReportedFor.current === attemptKey) return;
     failureReportedFor.current = attemptKey;
+<<<<<<< HEAD
+=======
+    checkoutDebug('paddle: Paddle.js could not be initialised', { paddleError, gatewayAttemptId });
+>>>>>>> 87b0fa6 (fix routing)
     void onGatewayFailure?.('paddle_checkout_unavailable', paddleError);
   }, [paddleError, gatewayAttemptId, onGatewayFailure]);
 
@@ -556,6 +571,10 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
         }),
       });
       const data = await response.json().catch(() => ({}));
+<<<<<<< HEAD
+=======
+      checkoutDebug(`paddle: /api/create-payment -> ${response.status}`, data);
+>>>>>>> 87b0fa6 (fix routing)
       if (!response.ok) {
         throw new Error(data.details || data.error || "Could not initiate Paddle payment.");
       }
@@ -663,6 +682,9 @@ function QuoteCheckoutPage() {
   const [routingDebug, setRoutingDebug] = useState<RoutingDebugInfo | null>(null);
   const [lastFailure, setLastFailure] = useState<PaymentFailureNote | null>(null);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [routingTrace, setRoutingTrace] = useState<GatewayRoutingTrace | null>(null);
+  const [gatewayFailureDetail, setGatewayFailureDetail] = useState<string | null>(null);
+  const [debugLog, setDebugLog] = useState<GatewayDebugEntry[]>([]);
   const routingStartedFor = useRef<string | null>(null);
   const flp_checksum = Cookies.get('flp_checksum');
 
