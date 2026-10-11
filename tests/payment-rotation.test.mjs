@@ -110,3 +110,31 @@ test('a checkout that already tried every provider reports no candidate', () => 
     assert.equal(decision.outcome, 'unavailable')
     assert.equal(decision.reason, 'none')
 })
+
+test('a finished round restarts at the first provider instead of failing the checkout', () => {
+    // Square and Paddle each served one checkout in round 1 and both quotas are
+    // used up - this is what brings the round to its end.
+    const order = ['square', 'paddle']
+    let states = { square: state(1, 1), paddle: state(1, 1) }
+    let decision = selectNextGateway(order, new Set(), states)
+    assert.equal(decision.outcome, 'start-new-round')
+
+    // The caller rolls every configured window over (and releases the usage the
+    // finished round left behind, including its still-live reservations - see
+    // countQuotaWindowUsage), then decides again. Square must be assigned, not
+    // "No healthy payment processors are available right now".
+    states = { square: state(1, 0), paddle: state(1, 0) }
+    decision = selectNextGateway(order, new Set(), states)
+    assert.equal(decision.outcome, 'assign')
+    assert.equal(decision.gateway, 'square')
+
+    // Round 2 then alternates exactly like round 1 did.
+    states = { square: state(1, 1), paddle: state(1, 0) }
+    decision = selectNextGateway(order, new Set(), states)
+    assert.equal(decision.outcome, 'assign')
+    assert.equal(decision.gateway, 'paddle')
+
+    // ... and the round is complete again, restarting at Square.
+    states = { square: state(1, 1), paddle: state(1, 1) }
+    assert.equal(selectNextGateway(order, new Set(), states).outcome, 'start-new-round')
+})

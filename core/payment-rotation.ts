@@ -309,18 +309,7 @@ async function loadProviderRotationState(
 
     let used = 0
     if (quota > 0) {
-        const quotaResetAt = readQuotaResetDate(providerSettings)
-        const usageRows = await executor<{ used: number }[]>`
-          SELECT COUNT(*)::int AS used
-          FROM payment_gateway_attempts
-          WHERE gateway = ${gateway}
-            AND created_at >= ${quotaResetAt}::timestamptz
-            AND (
-              status = 'succeeded'
-              OR (status IN ('reserved', 'pending') AND expires_at > CURRENT_TIMESTAMP)
-            )
-        `
-        used = Number(usageRows[0]?.used ?? 0)
+        used = await countQuotaWindowUsage(executor, gateway, readQuotaResetDate(providerSettings))
     }
 
     let customerCooldown = false
@@ -363,39 +352,115 @@ async function loadProviderRotationState(
     return { quota, used, autoPaused, customerCooldown }
 }
 
-/** Reservations that still hold a quota slot right after a round reset. */
-async function countLiveReservations(
+/**
+ * How much of one gateway's quota the round that started at `quotaResetAt`
+ * consumed: successful charges plus reservations that are still live.
+ *
+ * Everything here is scoped to the quota window on purpose. A reservation made
+ * for a checkout that was abandoned (or is still in flight) keeps holding its
+ * slot for up to 30 minutes, and the window is the only thing that separates
+ * "this reservation belongs to the round that just finished" from "this
+ * reservation belongs to the round that just started". Counting reservations
+ * without that filter is what used to deadlock the checkout: the round rolled
+ * over, the previous round's reservations were counted again, every gateway
+ * still looked full and the customer got "No healthy payment processors are
+ * available right now" after a perfectly good first round.
+ */
+async function countQuotaWindowUsage(
     executor: RotationExecutor,
     gateway: PaymentGatewayId,
+    quotaResetAt: string,
 ): Promise<number> {
     const rows = await executor<{ used: number }[]>`
       SELECT COUNT(*)::int AS used
       FROM payment_gateway_attempts
       WHERE gateway = ${gateway}
-        AND status IN ('reserved', 'pending')
-        AND expires_at > CURRENT_TIMESTAMP
+        AND created_at >= ${quotaResetAt}::timestamptz
+        AND (
+          status = 'succeeded'
+          OR (status IN ('reserved', 'pending') AND expires_at > CURRENT_TIMESTAMP)
+        )
     `
     return Number(rows[0]?.used ?? 0)
+}
+
+/**
+ * Settings rows are stored as JSON text; tolerate a plain object as well as a
+ * legacy value that was encoded twice (`"{\"paymentQuota\":1}"`).
+ */
+function parseSettingsRecord(value: unknown): Record<string, any> | null {
+    let parsed: unknown = value
+    for (let depth = 0; depth < 2 && typeof parsed === 'string'; depth += 1) {
+        if (!parsed.trim()) return null
+        try {
+            parsed = JSON.parse(parsed)
+        } catch {
+            return null
+        }
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as Record<string, any>
+}
+
+/**
+ * Fallback for a settings row the atomic reset could not rewrite (empty,
+ * legacy double-encoded, ...). The row is read and rewritten in the same
+ * transaction, using the database clock for the new window start, so a round
+ * restart is never silently skipped.
+ */
+async function fallbackResetQuotaRound(
+    executor: RotationExecutor,
+    gateway: PaymentGatewayId,
+): Promise<Record<string, any> | null> {
+    const rows = await executor<{ value: string | null; now_iso: string }[]>`
+      SELECT value,
+             to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS now_iso
+      FROM settings
+      WHERE param = ${gateway}
+      LIMIT 1
+    `
+    const row = rows[0]
+    if (!row) return null
+    const current = parseSettingsRecord(row.value) ?? {}
+    const updated = {
+        ...current,
+        quotaResetAt: row.now_iso,
+        quotaRound: asNonNegativeInteger(current.quotaRound, 0) + 1,
+    }
+    await executor`UPDATE settings SET value = ${JSON.stringify(updated)} WHERE param = ${gateway}`
+    return updated
 }
 
 /**
  * Roll the quota window of a completed round over so the next payment starts
  * again at the first provider. `quotaRound` keeps the cycle visible in the Ops
  * Hub with everything else unchanged.
+ *
+ * The updated rows are returned because the caller has to know the exact
+ * moment each new window started: the restarted round counts only the usage
+ * created inside it, so the finished round's reservations are released instead
+ * of blocking the first gateway all over again.
+ *
+ * `clock_timestamp()` (statement time) is used rather than
+ * `CURRENT_TIMESTAMP` (transaction start) so that a reservation another
+ * request committed between the start of this transaction and the reset stays
+ * strictly *before* the new window - with the transaction timestamp it would
+ * have been counted into the fresh round and could block it once more.
  */
 async function resetQuotaRound(
     executor: RotationExecutor,
     gateways: readonly PaymentGatewayId[],
-): Promise<void> {
+): Promise<Map<PaymentGatewayId, Record<string, any>>> {
+    const restarted = new Map<PaymentGatewayId, Record<string, any>>()
     for (const gateway of gateways) {
-        await executor`
+        const rows = await executor<{ value: string }[]>`
           UPDATE settings
           SET value = (
             jsonb_set(
               jsonb_set(
                 COALESCE(NULLIF(value, '')::jsonb, '{}'::jsonb),
                 '{quotaResetAt}',
-                to_jsonb(CURRENT_TIMESTAMP)
+                to_jsonb(clock_timestamp())
               ),
               '{quotaRound}',
               to_jsonb(COALESCE((COALESCE(NULLIF(value, '')::jsonb, '{}'::jsonb)->>'quotaRound')::int, 0) + 1)
@@ -404,8 +469,12 @@ async function resetQuotaRound(
           WHERE param = ${gateway}
             AND value IS NOT NULL
             AND value ~ '^[[:space:]]*[{]'
+          RETURNING value
         `
+        const updated = parseSettingsRecord(rows[0]?.value) ?? await fallbackResetQuotaRound(executor, gateway)
+        if (updated) restarted.set(gateway, updated)
     }
+    return restarted
 }
 
 function validateAllocationInput(input: AllocationInput): void {
@@ -421,7 +490,10 @@ function validateAllocationInput(input: AllocationInput): void {
  * Reserve the next eligible provider in operator order. The advisory lock and
  * active reservation ensure concurrent requests cannot overrun a provider's
  * configured quota. Failed attempts release their capacity; successful charges
- * keep consuming quota until an operator resets that provider's usage.
+ * keep consuming quota until the round is complete - every configured quota is
+ * used up - at which point the windows roll over and the rotation starts at the
+ * first provider again. Only usage created inside the current window counts, so
+ * the finished round's remaining reservations cannot block the new one.
  */
 async function allocateNextForCustomer(
     input: AllocationInput,
@@ -536,14 +608,23 @@ async function allocateNextForCustomer(
             // quota windows over and route the next payment to the first
             // provider in operator order again.
             resetGateways = gatewaysForRoundReset(order, states)
-            await resetQuotaRound(transaction, resetGateways)
+            const restartedWindows = await resetQuotaRound(transaction, resetGateways)
+            const releasedPreviousRound: Record<string, number> = {}
             for (const gateway of resetGateways) {
-                // The quota window restarted, so only live reservations still
-                // consume a slot in the new round.
-                states[gateway] = {
-                    ...states[gateway],
-                    used: await countLiveReservations(transaction, gateway),
-                }
+                const restarted = restartedWindows.get(gateway)
+                if (!restarted) continue
+                // The window is fresh, so re-count: only usage created inside
+                // the new round (nothing yet, or a reservation racing with this
+                // request) consumes a slot. The finished round's successful
+                // charges and its still-live reservations are released.
+                const used = await countQuotaWindowUsage(transaction, gateway, readQuotaResetDate(restarted))
+                const released = Math.max(0, states[gateway].used - used)
+                if (released > 0) releasedPreviousRound[gateway] = released
+                states[gateway] = { ...states[gateway], used }
+                // Keep the in-memory settings in step with the database so the
+                // trace below reports the new round number.
+                const config = providerConfigs.get(gateway)
+                providerConfigs.set(gateway, config ? { ...config, ...restarted } : restarted)
             }
             decision = selectNextGateway(order, previouslyTried, states)
             roundReset = true
@@ -551,12 +632,24 @@ async function allocateNextForCustomer(
                 checkoutId: input.checkoutId,
                 product: input.product,
                 resetGateways,
-                newRound: states[resetGateways[0]] ? Number(providerConfigs.get(resetGateways[0])?.quotaRound ?? 0) + 1 : null,
+                newRound: resetGateways.length > 0 ? Number(providerConfigs.get(resetGateways[0])?.quotaRound ?? 0) : null,
+                releasedPreviousRound,
                 states: summarizeRotationStates(states),
             })
         }
 
         if (decision.outcome === 'start-new-round') {
+            // The reset above could not free a single provider: even inside the
+            // brand new window every configured gateway is already full. That
+            // should be impossible, so leave a trace instead of only telling
+            // the customer that no processor is available.
+            logPaymentRouting('round-reset-incomplete', {
+                checkoutId: input.checkoutId,
+                product: input.product,
+                order,
+                resetGateways,
+                states: summarizeRotationStates(states),
+            })
             throw new PaymentRoutingError('No healthy payment processors are available right now.', 'NO_GATEWAY_AVAILABLE')
         }
         if (decision.outcome === 'unavailable') {
@@ -583,8 +676,8 @@ async function allocateNextForCustomer(
                 status, created_at, updated_at, expires_at
             ) VALUES(
                 ${id}::uuid, ${input.checkoutId}, ${input.product}, ${decision.gateway},
-                ${customerKey}, ${nextAttemptNumber}, 'reserved', CURRENT_TIMESTAMP,
-                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + (${RESERVATION_MINUTES} * INTERVAL '1 minute')
+                ${customerKey}, ${nextAttemptNumber}, 'reserved', clock_timestamp(),
+                clock_timestamp(), clock_timestamp() + (${RESERVATION_MINUTES} * INTERVAL '1 minute')
         )
         RETURNING id, checkout_id, product, gateway, customer_key, attempt_number,
         status, provider_reference, created_at, expires_at
