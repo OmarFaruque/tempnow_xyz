@@ -88,8 +88,6 @@ export async function POST(request: NextRequest) {
     try {
         const body = await request.json()
 
-        console.log('payment routing body', body);
-
         // The routing ledger drives live money flows, so only an authenticated
         // operator may force a round reset.
         if (body?.action === 'reset-round') {

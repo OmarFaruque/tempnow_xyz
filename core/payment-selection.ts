@@ -12,8 +12,12 @@
  *  3. A gateway whose configured quota is used up is skipped.
  *  4. The first remaining gateway receives the payment.
  *  5. When every remaining gateway is skipped only because its quota is used
- *     up, the round is complete: callers reset the quota windows and start a
- *     new round at the first provider again.
+ *   up, the round is complete: callers roll the quota windows over and start
+ *     a new round at the first provider again. A restarted round counts only
+ *     the usage created inside its own window - the finished round's charges
+ *     and, importantly, its still-live reservations are released, otherwise
+ *     "used" stays at the quota and the checkout deadlocks with no processor
+ *     available (see `countQuotaWindowUsage` in `payment-rotation.ts`).
  */
 
 export type ProviderQuotaState = {
