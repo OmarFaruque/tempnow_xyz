@@ -30,3 +30,7 @@ yarn-error.log*
 next-env.d.ts
 # local scratch / invoice previews
 /tmp/
+
+/patch
+/patch/*
+/patch/

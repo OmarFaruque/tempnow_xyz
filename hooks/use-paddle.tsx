@@ -1,13 +1,14 @@
 "use client";
 
 import { initializePaddle, Paddle } from "@paddle/paddle-js";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Cookies from "js-cookie";
 import { jwtDecode } from "jwt-decode";
 import { useNotifications } from "@/hooks/use-notifications"
 
 interface DecodedToken {
   userId: number;
+  id?: number;
   email: string;
   firstName: string | null;
   lastName: string | null;
@@ -16,10 +17,34 @@ interface DecodedToken {
   exp: number;
 }
 
+type PaddleCheckoutEvent = { name?: string; data?: any };
+
+/** How long to wait for the client token before failing the initialisation. */
+const CLIENT_TOKEN_TIMEOUT_MS = 24000;
+
+/** Paddle.js can only be initialised once per page, so the instance is shared. */
+let paddleCache: { token: string; instance: Paddle } | null = null;
+
 export default function usePaddle() {
-  const [paddle, setPaddle] = useState<Paddle | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
-  const { notifications, addNotification, removeNotification } = useNotifications()
+  const cached = typeof window !== "undefined" ? paddleCache : null;
+  const [paddle, setPaddle] = useState<Paddle | undefined>(cached?.instance);
+  const [loading, setLoading] = useState(!cached);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const { addNotification } = useNotifications()
+
+  /**
+   * Drop the initialised instance and fetch the token again. Used by the
+   * checkout button when Paddle could not be started (the loader used to stay
+   * on "Processing..." forever because `loading` was never cleared).
+   */
+  const reload = useCallback(() => {
+    paddleCache = null;
+    setPaddle(undefined);
+    setError(null);
+    setLoading(true);
+    setAttempt((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     const fetchClientToken = async () => {

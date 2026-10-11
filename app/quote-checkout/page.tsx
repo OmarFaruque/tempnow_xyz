@@ -23,6 +23,17 @@ import Cookies from 'js-cookie';
 import { Label } from '@/components/ui/label';
 import { getGatewayDisplayName, type PaymentGatewayId } from '@/core/payment-gateways';
 
+type GatewayRoutingTrace = {
+  order: string[];
+  tried: string[];
+  skipped: Array<{ gateway: string; reason: string; detail: string }>;
+  reusedReservation: boolean;
+  newRound: boolean;
+  states: Record<string, { quota: number; used: number; autoPaused: boolean; customerCooldown: boolean }>;
+};
+
+type GatewayDebugEntry = { at: string; event: string; data?: unknown };
+
 type PublicGatewayAttempt = {
   id: string;
   checkoutId: string;
@@ -37,6 +48,15 @@ type AuthorizeNetOpaqueData = {
   dataDescriptor: string;
   dataValue: string;
 };
+
+const CHECKOUT_DEBUG = process.env.NODE_ENV !== 'production';
+
+/** Grouped, timestamped console output for the payment flow (development only). */
+function checkoutDebug(event: string, data?: unknown) {
+  if (!CHECKOUT_DEBUG) return;
+  if (data === undefined) console.log(`[checkout] ${event}`);
+  else console.log(`[checkout] ${event}`, data);
+}
 
 declare global {
   interface Window {
@@ -464,6 +484,7 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
     const attemptKey = gatewayAttemptId || 'unattributed';
     if (failureReportedFor.current === attemptKey) return;
     failureReportedFor.current = attemptKey;
+    checkoutDebug('paddle: Paddle.js could not be initialised', { paddleError, gatewayAttemptId });
     void onGatewayFailure?.('paddle_checkout_unavailable');
   }, [paddleError, gatewayAttemptId, onGatewayFailure]);
 
@@ -477,6 +498,7 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
     }
     setIsProcessing(true);
     try {
+      checkoutDebug('paddle: initialising transaction via /api/create-payment', { gatewayAttemptId, quoteId: quote.id, total: discountedTotal });
       const response = await fetch("/api/create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -489,6 +511,7 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
         }),
       });
       const data = await response.json();
+      checkoutDebug(`paddle: /api/create-payment -> ${response.status}`, data);
       if (data.priceId) {
         paddle.Checkout.open({ items: [{ priceId: data.priceId, quantity: 1 }] });
       } else {
@@ -581,7 +604,15 @@ function QuoteCheckoutPage() {
   const [gatewayUnavailable, setGatewayUnavailable] = useState(false);
   const [rotationNotice, setRotationNotice] = useState<string | null>(null);
   const [routingAttemptKey, setRoutingAttemptKey] = useState(0);
+  const [routingTrace, setRoutingTrace] = useState<GatewayRoutingTrace | null>(null);
+  const [gatewayFailureDetail, setGatewayFailureDetail] = useState<string | null>(null);
+  const [debugLog, setDebugLog] = useState<GatewayDebugEntry[]>([]);
   const routingStartedFor = useRef<string | null>(null);
+  const pushDebug = (event: string, data?: unknown) => {
+    if (!CHECKOUT_DEBUG) return;
+    checkoutDebug(event, data);
+    setDebugLog((entries) => [...entries.slice(-29), { at: new Date().toISOString().slice(11, 23), event, data }]);
+  };
   const flp_checksum = Cookies.get('flp_checksum');
 
 
@@ -686,6 +717,7 @@ function QuoteCheckoutPage() {
             throw new Error(data.error || 'The alternate payment option could not be loaded.');
           }
           const attempt = data.attempt as PublicGatewayAttempt;
+          pushDebug(`routing: resumed attempt #${attempt.attemptNumber} on ${attempt.provider} from URL`, data.attempt);
           setGatewayAttempt(attempt);
           setSelectedPaymentMethod(attempt.provider);
           if (params.get('gatewayRetry') === '1') {
@@ -798,6 +830,12 @@ function QuoteCheckoutPage() {
       }
 
       const nextAttempt = data.attempt as PublicGatewayAttempt;
+      const trace = (data.routing ?? null) as GatewayRoutingTrace | null;
+      setRoutingTrace(trace);
+      pushDebug(
+        `routing: switched to attempt #${nextAttempt.attemptNumber}/${nextAttempt.maxAttempts} -> ${nextAttempt.provider}`,
+        { attempt: data.attempt, routing: trace, why: describeRouting(trace, nextAttempt.provider) },
+      );
       setGatewayAttempt(nextAttempt);
       setSelectedPaymentMethod(nextAttempt.provider);
       setPaymentView('card-details');

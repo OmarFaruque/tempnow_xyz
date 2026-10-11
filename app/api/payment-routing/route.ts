@@ -17,6 +17,19 @@ import type { PaymentProduct } from '@/core/payment-gateways'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
+/**
+ * The routing trace (which providers were skipped and why, quota counters)
+ * is returned to the checkout page for debugging. It is operator-level
+ * information, so outside development only the server log carries it.
+ */
+function withRoutingTrace<T extends { routing?: unknown }>(result: T): T {
+    if (process.env.NODE_ENV === 'production') {
+        const { routing: _routing, ...rest } = result
+        return rest as T
+    }
+    return result
+}
+
 function publicError(error: unknown) {
     if (error instanceof PaymentRoutingError) {
         return NextResponse.json({ success: false, code: error.code, error: error.message }, { status: 409 })
@@ -71,7 +84,7 @@ export async function POST(request: NextRequest) {
             const attemptId = typeof body.attemptId === 'string' ? body.attemptId : ''
             const failureCode = typeof body.failureCode === 'string' ? body.failureCode.slice(0, 100) : 'payment_declined'
             const result = await retryPaymentGatewayAttempt(attemptId, failureCode, customer)
-            return NextResponse.json({ success: true, ...result }, {
+            return NextResponse.json({ success: true, ...withRoutingTrace(result) }, {
                 headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
             })
         }
@@ -109,7 +122,7 @@ export async function POST(request: NextRequest) {
             customerEmail: customer.email,
         })
 
-        return NextResponse.json({ success: true, ...result }, {
+        return NextResponse.json({ success: true, ...withRoutingTrace(result) }, {
             headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
         })
     } catch (error) {
