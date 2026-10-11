@@ -154,8 +154,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(payload);
   };
   const markFailedResponse = async (payload: Record<string, unknown>, failureCode: string, status = 500) => {
-    await markPaymentGatewayAttempt(gatewayAttemptId, 'failed', { failureCode });
-    return NextResponse.json(payload, { status });
+    const rawDetails = (payload as any)?.details ?? (payload as any)?.error;
+    const failureMessage = typeof rawDetails === 'string' && rawDetails.trim() ? rawDetails.slice(0, 1000) : null;
+    await markPaymentGatewayAttempt(gatewayAttemptId, 'failed', { failureCode, failureMessage });
+    console.error(`[payment-routing] ${activeProvider} initialisation failed (attempt ${gatewayAttemptId}, ${failureCode}):`, failureMessage ?? payload);
+    return NextResponse.json({ ...payload, code: failureCode }, { status });
   };
 
   const generalSettings = await getSettings('general');

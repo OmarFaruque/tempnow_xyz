@@ -7,6 +7,7 @@ import { and, eq,  or, sql } from "drizzle-orm"
 import { sendEmail, createAIDocumentPurchaseEmail, createAdminNotificationEmail, getAdminEmail } from '@/lib/email';
 import { revalidatePath } from 'next/cache';
 import { v4 as uuidv4 } from 'uuid';
+import { markPaymentGatewayAttempt } from '@/core/payment-rotation';
 
 type NormalizedRefundEvent = {
   paddleEventId: string | null
@@ -99,6 +100,14 @@ async function handlePaymentSucceeded(data: any) {
   if (!customData && transaction.items && transaction.items.length > 0) {
     const firstItem = transaction.items[0];
     customData = firstItem.price?.custom_data || firstItem.price?.customData;
+  }
+
+  // The routed attempt that opened this Paddle checkout is settled first, so
+  // the provider's quota slot is spent even if a later fulfilment step throws.
+  if (customData?.gatewayAttemptId) {
+    await markPaymentGatewayAttempt(String(customData.gatewayAttemptId), 'succeeded', {
+      providerReference: transactionId ? String(transactionId) : null,
+    }).catch((error) => console.error('Failed to settle routed attempt from Paddle webhook:', error));
   }
 
   if (!customData) {
@@ -303,7 +312,30 @@ async function handlePaymentSucceeded(data: any) {
 }
 
 async function handlePaymentFailed(data: any) {
-  console.log("Payment failed:", data)
+  const transaction = data?.data || data || {}
+  const transactionId = transaction.id || transaction.transaction_id || transaction.checkout_id || null
+  let customData = transaction.custom_data || transaction.customData
+  if (!customData && Array.isArray(transaction.items) && transaction.items.length > 0) {
+    customData = transaction.items[0]?.price?.custom_data || transaction.items[0]?.price?.customData
+  }
+
+  // Paddle reports the decline reason in a few different shapes depending on
+  // the event version; keep the most specific string we can find.
+  const reason =
+    transaction?.payments?.[0]?.error_code ||
+    transaction?.error_code ||
+    transaction?.failure_reason ||
+    transaction?.status ||
+    'paddle_payment_failed'
+
+  console.error(`[payment-routing] Paddle payment failed for transaction ${transactionId ?? 'unknown'} (${reason})`)
+
+  if (customData?.gatewayAttemptId) {
+    await markPaymentGatewayAttempt(String(customData.gatewayAttemptId), 'failed', {
+      failureCode: String(reason),
+      failureMessage: `Paddle reported ${reason} for transaction ${transactionId ?? 'unknown'}.`,
+    }).catch((error) => console.error('Failed to mark routed attempt failed from Paddle webhook:', error))
+  }
 }
 
 

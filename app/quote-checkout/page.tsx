@@ -21,7 +21,7 @@ import { useQuoteExpiration } from '@/hooks/use-quote-expiration.tsx';
 import Cookies from 'js-cookie';
 // import styles from './checkout.module.css';
 import { Label } from '@/components/ui/label';
-import { getGatewayDisplayName, type PaymentGatewayId } from '@/core/payment-gateways';
+import { getConfiguredGatewayOrder, getGatewayDisplayName, type PaymentGatewayId } from '@/core/payment-gateways';
 
 type PublicGatewayAttempt = {
   id: string;
@@ -32,6 +32,21 @@ type PublicGatewayAttempt = {
   maxAttempts: number;
   status: 'reserved' | 'pending' | 'failed' | 'succeeded' | 'expired';
 };
+
+/** Admin-only routing explanation returned by /api/payment-routing. */
+type RoutingDebugInfo = {
+  order: string[];
+  previouslyTried: string[];
+  states: Record<string, { quota: number; used: number; autoPaused: boolean; customerCooldown: boolean }>;
+  roundReset: boolean;
+  resetGateways: string[];
+  outcome: string;
+  selected: string | null;
+  attemptNumber: number;
+  round: number;
+};
+
+type PaymentFailureNote = { code: string; message: string | null; at: string };
 
 type AuthorizeNetOpaqueData = {
   dataDescriptor: string;
@@ -251,12 +266,26 @@ const AuthorizeNetPayment = React.forwardRef(({ quoteData, user, quote, onProces
             user,
             flp_checksum,
             opaqueData,
+            gatewayAttemptId,
           }),
         });
 
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.success) {
-          throw new Error(data.details || data.error || 'Authorize.Net payment failed.');
+          const message = data.details || data.error || 'Authorize.Net payment failed.';
+          const code = data.code || 'authorizenet_declined';
+
+          // Fraud blocks are not bypassed by rotating; everything else moves to
+          // the next provider with the decline reason recorded.
+          if (response.status === 403 || response.status >= 500) {
+            toast({ variant: 'destructive', title: 'Payment Error', description: message });
+            onProcessingChange(false);
+            return;
+          }
+
+          toast({ variant: 'destructive', title: 'Payment Declined', description: message });
+          await onGatewayFailure?.(code, message);
+          return;
         }
 
         toast({ title: 'Payment Successful', description: 'Your payment has been processed.' });
@@ -264,6 +293,7 @@ const AuthorizeNetPayment = React.forwardRef(({ quoteData, user, quote, onProces
         window.location.href = `/payment-confirmation?gatewayAttemptId=${encodeURIComponent(gatewayAttemptId || '')}`;
       } catch (error: any) {
         toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
+        await onGatewayFailure?.('authorizenet_request_failed', error?.message || null);
         onProcessingChange(false);
       }
     },
@@ -322,7 +352,7 @@ const AuthorizeNetPayment = React.forwardRef(({ quoteData, user, quote, onProces
 });
 AuthorizeNetPayment.displayName = 'AuthorizeNetPayment';
 
-const StripeApplePayButton = ({ quoteData, user, quote, onProcessingChange, allTermsAccepted, settings, flp_checksum }) => {
+const StripeApplePayButton = ({ quoteData, user, quote, onProcessingChange, allTermsAccepted, settings, flp_checksum, gatewayAttemptId, onGatewayFailure }) => {
   const stripe = useStripe();
   const { toast } = useToast();
   const [paymentRequest, setPaymentRequest] = useState(null);
@@ -370,7 +400,9 @@ const StripeApplePayButton = ({ quoteData, user, quote, onProcessingChange, allT
         const handleSuccess = () => {
           toast({ title: "Payment Successful", description: "Your payment has been processed." });
           localStorage.removeItem('quoteCreationTimestamp');
-          window.location.href = "/payment-confirmation";
+          window.location.href = gatewayAttemptId
+            ? `/payment-confirmation?gatewayAttemptId=${encodeURIComponent(gatewayAttemptId)}`
+            : "/payment-confirmation";
         };
 
         try {
@@ -385,11 +417,14 @@ const StripeApplePayButton = ({ quoteData, user, quote, onProcessingChange, allT
               user: user,
               flp_checksum: flp_checksum,
               radar_session_id: radarSession.id, // Send session ID to backend
+              gatewayAttemptId,
             }),
           });
           const { clientSecret, error: clientSecretError } = await response.json();
           if (!mounted) return;
-          if (clientSecretError) throw new Error(clientSecretError.message || "Could not initiate Stripe payment.");
+          if (!response.ok || clientSecretError) {
+            throw new Error(clientSecretError?.message || clientSecretError || "Could not initiate Stripe payment.");
+          }
 
           const { paymentIntent, error: confirmError } = await stripe.confirmCardPayment(
             clientSecret,
@@ -422,6 +457,7 @@ const StripeApplePayButton = ({ quoteData, user, quote, onProcessingChange, allT
           if (!mounted) return;
           ev.complete('fail');
           toast({ variant: "destructive", title: "Payment Error", description: error.message });
+          await onGatewayFailure?.('stripe_wallet_failed', error?.message || null);
           onProcessingChange(false);
         }
       });
@@ -464,7 +500,7 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
     const attemptKey = gatewayAttemptId || 'unattributed';
     if (failureReportedFor.current === attemptKey) return;
     failureReportedFor.current = attemptKey;
-    void onGatewayFailure?.('paddle_checkout_unavailable');
+    void onGatewayFailure?.('paddle_checkout_unavailable', paddleError);
   }, [paddleError, gatewayAttemptId, onGatewayFailure]);
 
 
@@ -472,7 +508,7 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
     if (!paddle) {
       // Still initialising: the effect above rotates once it reports an error.
       if (!paddleError) return;
-      await onGatewayFailure?.('paddle_checkout_unavailable');
+      await onGatewayFailure?.('paddle_checkout_unavailable', paddleError);
       return;
     }
     setIsProcessing(true);
@@ -488,14 +524,21 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
           checkoutId: `quote:${quote.id}`,
         }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.details || data.error || "Could not initiate Paddle payment.");
+      }
       if (data.priceId) {
         paddle.Checkout.open({ items: [{ priceId: data.priceId, quantity: 1 }] });
       } else {
         throw new Error(data.error || "Could not initiate Paddle payment.");
       }
     } catch (error: any) {
+      console.error(`[checkout] Paddle could not start (${error?.message || error})`);
       toast({ variant: "destructive", title: "Payment Error", description: error.message });
+      // Paddle never opened, so the attempt rotates to the next provider
+      // instead of leaving the customer with a dead button.
+      await onGatewayFailure?.('paddle_init_failed', error?.message || null);
     } finally {
       setIsProcessing(false);
     }
@@ -515,7 +558,7 @@ const PaddleCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_
   );
 };
 
-const VivaCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_checksum, settings, quote, gatewayAttemptId }) => {
+const VivaCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_checksum, settings, quote, gatewayAttemptId, onGatewayFailure }) => {
   const { toast } = useToast();
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -533,17 +576,21 @@ const VivaCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_ch
           checkoutId: `quote:${quote.id}`,
         }),
       });
-      const data = await response.json();
-      if (data.orderCode) {
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.orderCode) {
         localStorage.setItem('quotePolicyNumber', quote.policyNumber); // Store policyNumber
         localStorage.removeItem('quoteCreationTimestamp'); // Clear timestamp
         const vivaEnv = settings.viva.env === 'demo' ? 'demo' : 'www';
         window.location.href = `https://${vivaEnv}.vivapayments.com/web/checkout?ref=${data.orderCode}`;
       } else {
-        throw new Error(data.error || "Could not initiate Viva payment.");
+        throw new Error(data.details || data.error || "Could not initiate Viva payment.");
       }
     } catch (error: any) {
+      console.error(`[checkout] Viva could not start: ${error?.message || error}`);
       toast({ variant: "destructive", title: "Payment Error", description: error.message });
+      // The attempt has already been released by the server, so continue with
+      // the next provider instead of leaving a dead button behind.
+      await onGatewayFailure?.('viva_init_failed', error?.message || null);
     } finally {
       setIsProcessing(false);
     }
@@ -564,7 +611,7 @@ const VivaCheckoutButton = ({ quoteData, user, discountedTotal, disabled, flp_ch
 };
 
 function QuoteCheckoutPage() {
-  const { isAuthenticated, user, loading: authLoading } = useAuth();
+  const { isAuthenticated, isAdmin, user, loading: authLoading } = useAuth();
   const { toast } = useToast();
   const router = useRouter();
   const settings = useSettings();
@@ -581,11 +628,23 @@ function QuoteCheckoutPage() {
   const [gatewayUnavailable, setGatewayUnavailable] = useState(false);
   const [rotationNotice, setRotationNotice] = useState<string | null>(null);
   const [routingAttemptKey, setRoutingAttemptKey] = useState(0);
+  // Debug view for operators: why this provider, and what the last error was.
+  const [routingDebug, setRoutingDebug] = useState<RoutingDebugInfo | null>(null);
+  const [lastFailure, setLastFailure] = useState<PaymentFailureNote | null>(null);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
   const routingStartedFor = useRef<string | null>(null);
   const flp_checksum = Cookies.get('flp_checksum');
 
 
-  const paymentProvider = settings?.paymentProvider?.activeProcessor;
+  const paymentSettings = settings?.paymentProvider;
+  const configuredGatewayOrder = getConfiguredGatewayOrder(paymentSettings);
+  const configuredActiveProcessor = typeof paymentSettings === 'string' ? paymentSettings : paymentSettings?.activeProcessor;
+  // Routing owns the provider for this checkout. The configured order is only a
+  // placeholder while the allocation request resolves, and the legacy
+  // "activeProcessor" string keeps older settings working.
+  const paymentProvider = gatewayAttempt?.provider
+    ?? configuredGatewayOrder[0]
+    ?? (configuredActiveProcessor && configuredActiveProcessor !== 'none' ? configuredActiveProcessor : null);
   const bankPaymentEnabled = settings?.bank?.show;
   const squareAppId = settings?.square?.appId;
   const squareLocationId = settings?.square?.appLocationId;
@@ -601,7 +660,11 @@ function QuoteCheckoutPage() {
   }, [selectedPaymentMethod, paymentView]);
 
   const paymentMethods = [];
-  if (paymentProvider) {
+  // Only the provider the router allocated for *this* checkout is offered, so a
+  // customer can never pay a quota the router already spent elsewhere. While
+  // routing is unavailable the card option disappears (bank transfer, which
+  // does not use a card gateway, stays available).
+  if (paymentProvider && !gatewayUnavailable) {
     const providerDescription = paymentProvider === 'square'
       ? 'Pay with card, Google Pay, or Apple Pay.'
       : ['mollie', 'paypal', 'checkoutcom', 'lemonsqueezy', 'paddle', 'viva'].includes(paymentProvider)
@@ -707,6 +770,7 @@ function QuoteCheckoutPage() {
         });
         const data = await response.json();
         if (!response.ok || !data.success) {
+          console.error('Payment routing refused the allocation:', data?.code || response.status, data?.error || data);
           setGatewayUnavailable(true);
           setRotationNotice(data.error || 'Online payment is temporarily unavailable.');
           return;
@@ -715,6 +779,10 @@ function QuoteCheckoutPage() {
         setGatewayAttempt(attempt);
         setSelectedPaymentMethod(attempt.provider);
         setGatewayUnavailable(false);
+        // Admins also receive the routing decision, so a checkout can be
+        // debugged without reading the server log.
+        if (data.debug) setRoutingDebug(data.debug as RoutingDebugInfo);
+        console.info(`[checkout] routed to ${attempt.provider} (attempt ${attempt.attemptNumber}/${attempt.maxAttempts}, status ${attempt.status})`, data.debug || '');
       } catch (error) {
         console.error('Payment gateway allocation failed:', error);
         setGatewayUnavailable(true);
@@ -770,9 +838,27 @@ function QuoteCheckoutPage() {
     }
   }, [selectedPaymentMethod, isAuthenticated, toast, quoteData, user, gatewayAttempt?.id, settings?.airwallex?.environment]);
 
+  // A Square checkout that is missing its application id, location id or
+  // enabled payment methods would render an empty card area, so the attempt is
+  // handed to the next provider with the reason recorded.
+  useEffect(() => {
+    if (selectedPaymentMethod !== 'square' || !gatewayAttempt) return;
+    const squareMethods = settings?.square?.paymentMethods;
+    const squareReady = !!squareAppId
+      && !!squareLocationId
+      && !!(squareMethods?.card || squareMethods?.googlePay || squareMethods?.applePay);
+    if (squareReady) return;
+    void handleGatewayFailure(
+      'square_not_configured',
+      'Square is not fully configured (application id, location id or enabled payment methods are missing).',
+    );
+  }, [selectedPaymentMethod, gatewayAttempt?.id, squareAppId, squareLocationId, settings?.square?.paymentMethods]);
 
-  const handleGatewayFailure = async (failureCode = 'payment_declined') => {
+
+  const handleGatewayFailure = async (failureCode = 'payment_declined', failureMessage?: string | null) => {
     const failedAttemptId = gatewayAttempt?.id;
+    setLastFailure({ code: failureCode, message: failureMessage ?? null, at: new Date().toISOString() });
+    console.warn(`[checkout] ${gatewayAttempt?.provider ?? 'gateway'} failed (${failureCode})${failureMessage ? `: ${failureMessage}` : ''}`);
     if (!failedAttemptId) {
       setIsProcessingPayment(false);
       toast({ variant: 'destructive', title: 'Payment Error', description: 'Something went wrong, please try again.' });
@@ -784,7 +870,7 @@ function QuoteCheckoutPage() {
       const response = await fetch('/api/payment-routing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'retry', attemptId: failedAttemptId, failureCode }),
+        body: JSON.stringify({ action: 'retry', attemptId: failedAttemptId, failureCode, failureMessage }),
       });
       const data = await response.json();
       if (!response.ok || !data.success) {
@@ -802,6 +888,7 @@ function QuoteCheckoutPage() {
       setSelectedPaymentMethod(nextAttempt.provider);
       setPaymentView('card-details');
       setGatewayUnavailable(false);
+      if (data.debug) setRoutingDebug(data.debug as RoutingDebugInfo);
       setRotationNotice(`Something went wrong, please try again. Continue securely with ${getGatewayDisplayName(nextAttempt.provider)} and enter your card details again.`);
       setAirwallexElement(null);
     } catch (error) {
@@ -852,15 +939,21 @@ function QuoteCheckoutPage() {
               checkoutId: `quote:${quote.id}`,
             }),
           });
-          const data = await response.json();
-          if (data.checkoutUrl) {
+          const data = await response.json().catch(() => ({}));
+          if (response.ok && data.checkoutUrl) {
             window.location.href = data.checkoutUrl;
           } else {
-            throw new Error(data.error || 'Could not initiate payment.');
+            const initError: any = new Error(data.details || data.error || 'Could not initiate payment.');
+            initError.code = data.code;
+            throw initError;
           }
         } catch (error: any) {
+          console.error(`[checkout] ${selectedPaymentMethod} could not start (${error?.code || 'init_failed'}):`, error.message);
           toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
-          setIsProcessingPayment(false);
+          // The attempt was already marked failed by the server, so the
+          // customer is moved to the next provider instead of retrying a
+          // button that can no longer succeed.
+          await handleGatewayFailure(error?.code || `${selectedPaymentMethod}_init_failed`, error?.message || null);
         }
         break;
       case 'mollie':
@@ -878,15 +971,18 @@ function QuoteCheckoutPage() {
               checkoutId: `quote:${quote.id}`,
             }),
           });
-          const data = await response.json();
-          if (data.checkoutUrl) {
+          const data = await response.json().catch(() => ({}));
+          if (response.ok && data.checkoutUrl) {
             window.location.href = data.checkoutUrl;
           } else {
-            throw new Error(data.error || 'Could not initiate payment.');
+            const initError: any = new Error(data.details || data.error || 'Could not initiate payment.');
+            initError.code = data.code;
+            throw initError;
           }
         } catch (error: any) {
+          console.error(`[checkout] ${selectedPaymentMethod} could not start (${error?.code || 'init_failed'}):`, error.message);
           toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
-          setIsProcessingPayment(false);
+          await handleGatewayFailure(error?.code || `${selectedPaymentMethod}_init_failed`, error?.message || null);
         }
         break;
 
@@ -967,7 +1063,27 @@ function QuoteCheckoutPage() {
   };
 
   const handleSquarePayment = async (token: any, verifiedBuyer?: any) => {
-    if (!token) return;
+    // Square hands tokenisation failures back through the same callback: the
+    // card never reached the API, so the attempt rotates to the next provider.
+    const tokenizationErrors = Array.isArray(token?.errors) ? token.errors : null;
+    if (tokenizationErrors) {
+      const message = tokenizationErrors
+        .map((entry: any) => entry?.detail || entry?.message || entry?.code)
+        .filter(Boolean)
+        .join(', ') || 'Square could not accept these card details.';
+      const code = String(tokenizationErrors[0]?.code || 'square_tokenization_failed');
+      toast({ variant: 'destructive', title: 'Card Details Rejected', description: message });
+      await handleGatewayFailure(`square_${code}`, message);
+      return;
+    }
+    if (!token?.token) {
+      if (token) {
+        toast({ variant: 'destructive', title: 'Payment Error', description: 'Square did not return a payment token. Please try again.' });
+        await handleGatewayFailure('square_token_missing', 'Square did not return a payment token.');
+      }
+      return;
+    }
+
     setIsProcessingPayment(true);
     try {
       const response = await fetch('/api/quote-checkout/create-square-payment', {
@@ -979,18 +1095,35 @@ function QuoteCheckoutPage() {
           quoteData: { ...quoteData, id: quote.id, total: quoteData?.total },
           user: user,
           flp_checksum: flp_checksum,
+          gatewayAttemptId: gatewayAttempt?.id,
         }),
       });
       if (response.ok) {
         toast({ title: 'Payment Successful', description: 'Your payment has been processed.' });
         localStorage.removeItem('quoteCreationTimestamp');
-        window.location.href = '/payment-confirmation';
-      } else {
-        const error = await response.json();
-        throw new Error(error.details || 'Square payment failed.');
+        window.location.href = `/payment-confirmation?gatewayAttemptId=${encodeURIComponent(gatewayAttempt?.id || '')}`;
+        return;
       }
+
+      const error = await response.json().catch(() => ({}));
+      const message = error.details || error.error || 'Square payment failed.';
+      const code = error.code || 'square_payment_failed';
+      console.error(`[checkout] Square declined the payment (${code}):`, message, error.rawError || '');
+
+      // Fraud blocks and unexpected server errors may still have taken money
+      // (or must not be bypassed), so the checkout stays on Square and only
+      // shows the reason. Everything else rotates to the next provider.
+      if (response.status === 403 || response.status >= 500) {
+        toast({ variant: 'destructive', title: 'Payment Error', description: message });
+        setLastFailure({ code, message, at: new Date().toISOString() });
+        return;
+      }
+
+      toast({ variant: 'destructive', title: 'Payment Declined', description: message });
+      await handleGatewayFailure(code, message);
     } catch (error: any) {
       toast({ variant: 'destructive', title: 'Payment Error', description: error.message });
+      setLastFailure({ code: 'square_request_failed', message: error.message, at: new Date().toISOString() });
     } finally {
       setIsProcessingPayment(false);
     }
@@ -1144,7 +1277,7 @@ function QuoteCheckoutPage() {
                 </div>
 
                 {/* Payment Disabled Notice */}
-                {(paymentProvider === 'none' || (!paymentProvider && !bankPaymentEnabled)) && (
+                {(!paymentProvider && !bankPaymentEnabled) && (
                   <div className="space-y-4">
                     <div className="rounded-xl border-2 border-orange-200 bg-gradient-to-b from-orange-50 to-amber-50 p-6 text-center">
                       <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-orange-100">
@@ -1190,7 +1323,52 @@ function QuoteCheckoutPage() {
                   </div>
                 )}
 
-                {paymentProvider !== 'none' && paymentView === "selection" && (
+                {/* Routing could not hand this checkout to any provider */}
+                {gatewayUnavailable && paymentProvider !== null && (
+                  <div className="space-y-4">
+                    <div className="rounded-xl border-2 border-orange-200 bg-gradient-to-b from-orange-50 to-amber-50 p-6 text-center">
+                      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-orange-100">
+                        <Info className="h-7 w-7 text-orange-600" />
+                      </div>
+                      <h3 className="mb-2 text-lg font-semibold text-orange-900">
+                        {bankPaymentEnabled ? 'Card Payment Temporarily Unavailable' : 'Payment Temporarily Unavailable'}
+                      </h3>
+                      <p className="text-sm text-gray-700 leading-relaxed">
+                        {rotationNotice || 'We could not prepare a secure payment option right now.'}
+                      </p>
+                      <p className="mt-2 text-xs text-gray-500">
+                        No card details have been taken and you have not been charged.
+                      </p>
+                    </div>
+                    <Button
+                      className="w-full bg-gradient-to-r from-yellow-500 to-yellow-600 font-semibold text-slate-950 hover:from-yellow-400 hover:to-yellow-500"
+                      onClick={handleRetryGatewayRouting}
+                      disabled={gatewayLoading}
+                    >
+                      {gatewayLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Loader2 className="mr-2 h-4 w-4" />}
+                      Try Again
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => router.push('/')}
+                    >
+                      <ArrowLeft className="mr-2 h-4 w-4" />
+                      Return to Homepage
+                    </Button>
+                  </div>
+                )}
+
+                {/* Allocation still resolving: never show a gateway before the
+                    router has decided which one may take this payment. */}
+                {gatewayLoading && !gatewayUnavailable && !gatewayAttempt && paymentProvider !== null && (
+                  <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border p-8 text-center">
+                    <Loader2 className="h-7 w-7 animate-spin text-teal-600" />
+                    <p className="text-sm text-muted-foreground">Preparing your secure payment options…</p>
+                  </div>
+                )}
+
+                {!gatewayLoading && paymentMethods.length > 0 && paymentView === "selection" && (
                   <>
                     <h3 className="mb-4 text-sm font-medium text-foreground">Select Payment Method</h3>
 
@@ -1225,6 +1403,8 @@ function QuoteCheckoutPage() {
                             allTermsAccepted={allTermsAccepted}
                             settings={settings}
                             flp_checksum={flp_checksum}
+                            gatewayAttemptId={gatewayAttempt?.id}
+                            onGatewayFailure={handleGatewayFailure}
                           />
                         </div>
                       )}
@@ -1232,12 +1412,14 @@ function QuoteCheckoutPage() {
                   </>
                 )}
 
-                {paymentView === "card-details" && (
+                {!gatewayUnavailable && paymentView === "card-details" && (
                   <div className="space-y-6">
                     <div className="flex items-center gap-3 rounded-lg bg-teal-50 p-4">
                       <CreditCard className="h-5 w-5 text-teal-600" />
                       <div>
-                        <div className="font-medium text-card-foreground">Credit or Debit Card</div>
+                        <div className="font-medium text-card-foreground">
+                          Credit or Debit Card{selectedPaymentMethod && selectedPaymentMethod !== 'bank' ? ` · ${getGatewayDisplayName(selectedPaymentMethod)}` : ''}
+                        </div>
                         <div className="text-sm text-muted-foreground">Enter your card details below</div>
                       </div>
                     </div>
@@ -1266,6 +1448,8 @@ function QuoteCheckoutPage() {
                         onProcessingChange={setIsProcessingPayment}
                         flp_checksum={flp_checksum}
                         settings={settings}
+                        gatewayAttemptId={gatewayAttempt?.id}
+                        onGatewayFailure={handleGatewayFailure}
                       />
                     )}
 
@@ -1298,6 +1482,13 @@ function QuoteCheckoutPage() {
                           </p>
                         </div>
                       )
+                    )}
+                    {selectedPaymentMethod === 'square' && !(squareAppId && squareLocationId && (settings?.square?.paymentMethods?.card || settings?.square?.paymentMethods?.googlePay || settings?.square?.paymentMethods?.applePay)) && (
+                      <div className="rounded-lg border border-dashed border-yellow-500 bg-yellow-50 p-6 text-center">
+                        <p className="text-sm font-medium leading-relaxed text-yellow-800">
+                          Square is not available on this store right now. Switching you to the next secure payment provider…
+                        </p>
+                      </div>
                     )}
                     {(selectedPaymentMethod === 'mollie' || selectedPaymentMethod === 'paypal' || selectedPaymentMethod === 'viva' || selectedPaymentMethod === 'lemonsqueezy' || selectedPaymentMethod === 'checkoutcom') && (
                       <div className="rounded-lg border border-border bg-muted p-6 text-center">
@@ -1347,6 +1538,7 @@ function QuoteCheckoutPage() {
                         settings={settings}
                         quote={quote}
                         gatewayAttemptId={gatewayAttempt?.id}
+                        onGatewayFailure={handleGatewayFailure}
                       />
                     ) : selectedPaymentMethod === 'lemonsqueezy' ? (
                       <Button
@@ -1439,6 +1631,75 @@ function QuoteCheckoutPage() {
                 )}
               </div>
             </div>
+
+            {/* Admin-only routing diagnostics: why this provider, and what the
+                last gateway error actually said. */}
+            {isAdmin && (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-xs text-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setShowDebugPanel((value) => !value)}
+                  className="flex w-full items-center justify-between text-sm font-semibold text-slate-800"
+                >
+                  <span>Payment debug (admin only)</span>
+                  <span className="text-slate-500">{showDebugPanel ? 'Hide' : 'Show'}</span>
+                </button>
+
+                {showDebugPanel && (
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <div className="font-semibold text-slate-600">Routed attempt</div>
+                      {gatewayAttempt ? (
+                        <div className="font-mono">
+                          {gatewayAttempt.provider} · attempt {gatewayAttempt.attemptNumber}/{gatewayAttempt.maxAttempts} · {gatewayAttempt.status}<br />
+                          id {gatewayAttempt.id}<br />
+                          checkout {gatewayAttempt.checkoutId}
+                        </div>
+                      ) : (
+                        <div className="font-mono">{gatewayLoading ? 'resolving…' : 'no attempt allocated'}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="font-semibold text-slate-600">Routing decision</div>
+                      {routingDebug ? (
+                        <div className="font-mono">
+                          order {(routingDebug.order || []).join(' → ')} · picked {routingDebug.selected ?? '—'} · round {routingDebug.round}<br />
+                          already tried: {routingDebug.previouslyTried?.length ? routingDebug.previouslyTried.join(', ') : 'none'}
+                          {routingDebug.roundReset ? ` · new round started (reset ${routingDebug.resetGateways?.join(', ')})` : ''}
+                          <br />
+                          {Object.entries(routingDebug.states || {}).map(([gateway, state]) => (
+                            <span key={gateway} className="mr-3">
+                              {gateway}: {state.quota > 0 ? `${state.used}/${state.quota}` : `${state.used}/∞`}
+                              {state.autoPaused ? ' (auto-paused)' : ''}
+                              {state.customerCooldown ? ' (cooldown)' : ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="font-mono">not available (not signed in as admin when allocating)</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="font-semibold text-slate-600">Last failure</div>
+                      {lastFailure ? (
+                        <div className="font-mono">
+                          {lastFailure.code} · {new Date(lastFailure.at).toLocaleTimeString()}<br />
+                          {lastFailure.message || 'no provider message'}
+                        </div>
+                      ) : (
+                        <div className="font-mono">none</div>
+                      )}
+                    </div>
+
+                    <div className="text-slate-500">
+                      Full history (every attempt with its failure reason) is in Admin → Settings → Payment → Payment diagnostics.
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
               <div className="flex items-start gap-4">

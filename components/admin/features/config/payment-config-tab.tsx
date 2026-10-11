@@ -103,6 +103,10 @@ export function PaymentSettingsTab({
 }: PaymentSettingsTabProps) {
     const [gatewayStats, setGatewayStats] = useState<Record<string, any>>({})
     const [statsLoading, setStatsLoading] = useState(false)
+    const [attempts, setAttempts] = useState<any[]>([])
+    const [attemptsLoading, setAttemptsLoading] = useState(false)
+    const [attemptFilter, setAttemptFilter] = useState("all")
+    const [resetLoading, setResetLoading] = useState(false)
     const gatewayOrder = getConfiguredGatewayOrder(settings?.payment)
     const updateSquarePaymentMethod = (method: string, enabled: boolean) => {
         updateSetting("square", "paymentMethods", {
@@ -147,9 +151,53 @@ export function PaymentSettingsTab({
         }
     }
 
+    const refreshAttempts = async () => {
+        setAttemptsLoading(true)
+        try {
+            const filter = attemptFilter === "all" ? "" : `&gateway=${encodeURIComponent(attemptFilter)}`
+            const response = await fetch(`/api/payment-routing?attempts=1&limit=50${filter}`, { cache: "no-store" })
+            const result = await response.json()
+            if (response.ok && result.success) {
+                setAttempts(result.attempts || [])
+            }
+        } catch (error) {
+            console.error("Failed to load recent payment attempts:", error)
+        } finally {
+            setAttemptsLoading(false)
+        }
+    }
+
+    const handleResetRounds = async () => {
+        setResetLoading(true)
+        try {
+            const response = await fetch("/api/payment-routing", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "reset-round" }),
+            })
+            const result = await response.json()
+            if (response.ok && result.success) {
+                if (Array.isArray(result.gateways)) {
+                    setGatewayStats(Object.fromEntries((result.gateways || []).map((row: any) => [row.gateway, row])))
+                }
+                await refreshAttempts()
+            } else {
+                console.error("Could not reset the payment rounds:", result?.error)
+            }
+        } catch (error) {
+            console.error("Failed to reset payment rounds:", error)
+        } finally {
+            setResetLoading(false)
+        }
+    }
+
     useEffect(() => {
         void refreshGatewayStats()
     }, [])
+
+    useEffect(() => {
+        void refreshAttempts()
+    }, [attemptFilter])
 
     const isGatewayActive = (gateway: PaymentGatewayId) => gatewayOrder.includes(gateway)
 
@@ -289,6 +337,91 @@ export function PaymentSettingsTab({
                                 )
                             })}
                         </div>
+                    </section>
+
+                    <section className="border-t pt-5 space-y-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                            <div>
+                                <Label className="flex items-center gap-2"><Database className="h-4 w-4" /> Payment diagnostics</Label>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    Every payment attempt with the provider's answer. Use this to see exactly why a gateway failed
+                                    (decline code and message) and which provider each checkout was routed to.
+                                </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Select value={attemptFilter} onValueChange={setAttemptFilter}>
+                                    <SelectTrigger className="h-9 w-[170px]">
+                                        <SelectValue placeholder="All gateways" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All gateways</SelectItem>
+                                        {PAYMENT_GATEWAYS.map((gateway) => (
+                                            <SelectItem key={gateway.id} value={gateway.id}>{gateway.label}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                <Button type="button" variant="outline" size="sm" onClick={() => void refreshAttempts()} disabled={attemptsLoading}>
+                                    <RefreshCw className={`mr-2 h-4 w-4 ${attemptsLoading ? "animate-spin" : ""}`} /> Refresh
+                                </Button>
+                                <Button type="button" variant="outline" size="sm" onClick={() => void handleResetRounds()} disabled={resetLoading}>
+                                    <RefreshCw className={`mr-2 h-4 w-4 ${resetLoading ? "animate-spin" : ""}`} /> Start new round now
+                                </Button>
+                            </div>
+                        </div>
+
+                        {attempts.length === 0 ? (
+                            <p className="rounded-lg border border-dashed p-4 text-sm text-gray-500">
+                                No payment attempts recorded yet.
+                            </p>
+                        ) : (
+                            <div className="max-h-96 overflow-y-auto rounded-lg border">
+                                <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-slate-50 text-left uppercase tracking-wide text-gray-500">
+                                        <tr>
+                                            <th className="px-3 py-2">When</th>
+                                            <th className="px-3 py-2">Gateway</th>
+                                            <th className="px-3 py-2">Try</th>
+                                            <th className="px-3 py-2">Status</th>
+                                            <th className="px-3 py-2">Failure reason</th>
+                                            <th className="px-3 py-2">Checkout</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y">
+                                        {attempts.map((attempt: any) => {
+                                            const statusStyles: Record<string, string> = {
+                                                succeeded: "bg-green-100 text-green-800",
+                                                failed: "bg-red-100 text-red-800",
+                                                pending: "bg-blue-100 text-blue-800",
+                                                reserved: "bg-slate-100 text-slate-700",
+                                                expired: "bg-amber-100 text-amber-800",
+                                            }
+                                            const label = PAYMENT_GATEWAYS.find((gateway) => gateway.id === attempt.gateway)?.label || attempt.gateway
+                                            return (
+                                                <tr key={attempt.id} className="align-top">
+                                                    <td className="whitespace-nowrap px-3 py-2 text-gray-600">
+                                                        {new Date(attempt.createdAt).toLocaleString()}
+                                                    </td>
+                                                    <td className="whitespace-nowrap px-3 py-2 font-medium">{label}</td>
+                                                    <td className="px-3 py-2 text-gray-600">#{attempt.attemptNumber}</td>
+                                                    <td className="px-3 py-2">
+                                                        <span className={`rounded px-2 py-0.5 font-medium ${statusStyles[attempt.status] || "bg-slate-100 text-slate-700"}`}>
+                                                            {attempt.expired ? `${attempt.status} (expired)` : attempt.status}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-gray-700">
+                                                        {attempt.failureCode && (
+                                                            <span className="mr-2 rounded bg-red-50 px-1.5 py-0.5 font-mono text-red-700">{attempt.failureCode}</span>
+                                                        )}
+                                                        {attempt.failureMessage || (attempt.providerReference ? `ref ${attempt.providerReference}` : "—")}
+                                                    </td>
+                                                    <td className="px-3 py-2 font-mono text-gray-500">{attempt.checkoutId}</td>
+                                                </tr>
+                                            )
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
                     </section>
 
                     {gatewayOrder.length === 0 && (
