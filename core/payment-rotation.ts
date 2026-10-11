@@ -275,15 +275,19 @@ export function ensurePaymentGatewayAttemptsTable(): Promise<void> {
 function isMissingAttemptsTable(error: unknown): boolean {
     const code = (error as { code?: string } | null)?.code
     const message = String((error as { message?: string } | null)?.message ?? '')
-    return code === '42P01' && message.includes('payment_gateway_attempts')
+    return (
+        (code === '42P01' && message.includes('payment_gateway_attempts')) ||
+        (code === '42703' && (message.includes('failure_message') || message.includes('failure_code')))
+    )
 }
 
-/** Retry once after creating the attempt ledger when the migration is missing. */
+/** Retry once after creating the attempt ledger or adding missing columns when migration is pending. */
 async function withPaymentAttemptsTable<T>(operation: () => Promise<T>): Promise<T> {
     try {
         return await operation()
     } catch (error) {
         if (!isMissingAttemptsTable(error)) throw error
+        attemptsTablePromise = null
         await ensurePaymentGatewayAttemptsTable()
         return await operation()
     }

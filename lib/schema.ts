@@ -184,6 +184,7 @@ export const paymentGatewayAttempts = pgTable("payment_gateway_attempts", {
 	status: varchar("status", { length: 24 }).default('reserved').notNull(),
 	providerReference: text("provider_reference"),
 	failureCode: varchar("failure_code", { length: 100 }),
+	failureMessage: text("failure_message"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
