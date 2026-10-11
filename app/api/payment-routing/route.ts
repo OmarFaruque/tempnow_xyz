@@ -165,9 +165,10 @@ export async function POST(request: NextRequest) {
         })
 
         // Admins testing the rotation can see exactly why a provider was
-        // chosen; regular customers only get what the checkout needs.
-        const callerIsAdmin = await isAdmin(request)
-        const payload = callerIsAdmin ? result : { attempt: result.attempt, maxRetries: result.maxRetries }
+        // chosen; outside production every developer does too. Regular
+        // customers only get what the checkout needs.
+        const routingTraceVisible = process.env.NODE_ENV !== 'production' || (await isAdmin(request))
+        const payload = routingTraceVisible ? result : { attempt: result.attempt, maxRetries: result.maxRetries }
 
         return NextResponse.json({ success: true, ...payload }, {
             headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },

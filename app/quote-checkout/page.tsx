@@ -48,6 +48,37 @@ type RoutingDebugInfo = {
 
 type PaymentFailureNote = { code: string; message: string | null; at: string };
 
+/**
+ * Human-readable explanation of a routing decision ("picked paddle, square
+ * exhausted 1/1"). Used in the console log and the admin debug panel so a
+ * checkout can be explained without reading the server log.
+ */
+function describeRouting(debug: RoutingDebugInfo | null | undefined, provider?: string | null): string {
+  if (!debug) return `routing trace unavailable for ${provider ?? 'this attempt'}`;
+
+  const states = debug.states || {};
+  const picked = debug.selected ?? provider ?? 'unknown';
+  const parts = [
+    `picked ${picked}`,
+    `round ${debug.round}`,
+    `attempt #${debug.attemptNumber}`,
+    `order ${(debug.order || []).join(' → ') || 'n/a'}`,
+  ];
+
+  const otherStates = Object.entries(states)
+    .filter(([gateway]) => gateway !== picked)
+    .map(([gateway, state]) => {
+      const quota = state.quota > 0 ? `${state.used}/${state.quota}` : `${state.used}/∞`;
+      const flags = [state.autoPaused ? 'auto-paused' : null, state.customerCooldown ? 'cooldown' : null].filter(Boolean).join(', ');
+      return `${gateway} ${quota}${flags ? ` (${flags})` : ''}`;
+    });
+  if (otherStates.length) parts.push(`others: ${otherStates.join(', ')}`);
+  if (debug.previouslyTried?.length) parts.push(`already tried: ${debug.previouslyTried.join(', ')}`);
+  if (debug.roundReset) parts.push(`new round started (reset ${debug.resetGateways?.join(', ') || 'quota'})`);
+
+  return parts.join(' · ');
+}
+
 type AuthorizeNetOpaqueData = {
   dataDescriptor: string;
   dataValue: string;
@@ -781,8 +812,9 @@ function QuoteCheckoutPage() {
         setGatewayUnavailable(false);
         // Admins also receive the routing decision, so a checkout can be
         // debugged without reading the server log.
-        if (data.debug) setRoutingDebug(data.debug as RoutingDebugInfo);
-        console.info(`[checkout] routed to ${attempt.provider} (attempt ${attempt.attemptNumber}/${attempt.maxAttempts}, status ${attempt.status})`, data.debug || '');
+        const trace = (data.debug ?? null) as RoutingDebugInfo | null;
+        if (trace) setRoutingDebug(trace);
+        console.info(`[checkout] ${describeRouting(trace, attempt.provider)}`, trace || '');
       } catch (error) {
         console.error('Payment gateway allocation failed:', error);
         setGatewayUnavailable(true);
@@ -888,7 +920,9 @@ function QuoteCheckoutPage() {
       setSelectedPaymentMethod(nextAttempt.provider);
       setPaymentView('card-details');
       setGatewayUnavailable(false);
-      if (data.debug) setRoutingDebug(data.debug as RoutingDebugInfo);
+      const trace = (data.debug ?? null) as RoutingDebugInfo | null;
+      if (trace) setRoutingDebug(trace);
+      console.info(`[checkout] rotated: ${describeRouting(trace, nextAttempt.provider)}`);
       setRotationNotice(`Something went wrong, please try again. Continue securely with ${getGatewayDisplayName(nextAttempt.provider)} and enter your card details again.`);
       setAirwallexElement(null);
     } catch (error) {
@@ -1663,18 +1697,21 @@ function QuoteCheckoutPage() {
                     <div>
                       <div className="font-semibold text-slate-600">Routing decision</div>
                       {routingDebug ? (
-                        <div className="font-mono">
-                          order {(routingDebug.order || []).join(' → ')} · picked {routingDebug.selected ?? '—'} · round {routingDebug.round}<br />
-                          already tried: {routingDebug.previouslyTried?.length ? routingDebug.previouslyTried.join(', ') : 'none'}
-                          {routingDebug.roundReset ? ` · new round started (reset ${routingDebug.resetGateways?.join(', ')})` : ''}
-                          <br />
-                          {Object.entries(routingDebug.states || {}).map(([gateway, state]) => (
-                            <span key={gateway} className="mr-3">
-                              {gateway}: {state.quota > 0 ? `${state.used}/${state.quota}` : `${state.used}/∞`}
-                              {state.autoPaused ? ' (auto-paused)' : ''}
-                              {state.customerCooldown ? ' (cooldown)' : ''}
-                            </span>
-                          ))}
+                        <div className="space-y-1">
+                          <div className="font-mono">{describeRouting(routingDebug, gatewayAttempt?.provider)}</div>
+                          <div className="font-mono">
+                            order {(routingDebug.order || []).join(' → ')} · picked {routingDebug.selected ?? '—'} · round {routingDebug.round}<br />
+                            already tried: {routingDebug.previouslyTried?.length ? routingDebug.previouslyTried.join(', ') : 'none'}
+                            {routingDebug.roundReset ? ` · new round started (reset ${routingDebug.resetGateways?.join(', ')})` : ''}
+                            <br />
+                            {Object.entries(routingDebug.states || {}).map(([gateway, state]) => (
+                              <span key={gateway} className="mr-3">
+                                {gateway}: {state.quota > 0 ? `${state.used}/${state.quota}` : `${state.used}/∞`}
+                                {state.autoPaused ? ' (auto-paused)' : ''}
+                                {state.customerCooldown ? ' (cooldown)' : ''}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       ) : (
                         <div className="font-mono">not available (not signed in as admin when allocating)</div>

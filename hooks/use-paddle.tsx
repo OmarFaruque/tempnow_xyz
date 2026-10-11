@@ -7,13 +7,31 @@ import { jwtDecode } from "jwt-decode";
 import { useNotifications } from "@/hooks/use-notifications"
 
 interface DecodedToken {
-  userId: number;
+  userId?: number;
+  /** The auth JWT carries the account id as `id`. */
+  id?: number;
   email: string;
   firstName: string | null;
   lastName: string | null;
   role: string;
   iat: number;
   exp: number;
+}
+
+/** How long to wait for the client token before failing the initialisation. */
+const CLIENT_TOKEN_TIMEOUT_MS = 24000;
+
+/** Paddle.js is initialised once per page, so the instance is shared. */
+let paddleCache: { instance: Paddle } | null = null;
+
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -42,17 +60,21 @@ function describePaddleError(event: any): string {
 }
 
 export default function usePaddle() {
-  const [paddle, setPaddle] = useState<Paddle | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
+  // A second call to Paddle.js on the same page is not supported, so an
+  // already-initialised instance is reused instead of re-initialising.
+  const cached = typeof window !== "undefined" ? paddleCache : null;
+  const [paddle, setPaddle] = useState<Paddle | undefined>(cached?.instance);
+  const [loading, setLoading] = useState(!cached);
   // Non-null only when Paddle itself could not start. The checkout uses this to
   // hand the customer to the next provider instead of spinning forever.
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const { addNotification } = useNotifications()
-  const paddleRef = useRef<Paddle | undefined>(undefined);
+  const paddleRef = useRef<Paddle | undefined>(cached?.instance);
 
   const reload = useCallback(() => {
     paddleRef.current = undefined;
+    paddleCache = null;
     setPaddle(undefined);
     setError(null);
     setLoading(true);
@@ -63,14 +85,16 @@ export default function usePaddle() {
     let cancelled = false;
 
     const fetchClientToken = async () => {
-      const response = await fetch("/api/paddle/client-token");
+      // A hung request here used to leave the button on "Processing..."
+      // forever, because `loading` was never cleared.
+      const response = await fetchWithTimeout("/api/paddle/client-token", CLIENT_TOKEN_TIMEOUT_MS);
       const data = await response.json().catch(() => null);
       return data?.clientToken ?? null;
     };
 
     const fetchEnvironment = async () => {
       try {
-        const response = await fetch("/api/paddle/environment");
+        const response = await fetchWithTimeout("/api/paddle/environment", CLIENT_TOKEN_TIMEOUT_MS);
         const data = await response.json();
         return data.environment;
       } catch (error) {
@@ -277,6 +301,7 @@ export default function usePaddle() {
           throw new Error("Paddle checkout could not be loaded.");
         }
         if (cancelled) return;
+        paddleCache = { instance };
         paddleRef.current = instance;
         setPaddle(instance);
         setLoading(false);
