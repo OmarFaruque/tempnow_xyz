@@ -2,11 +2,9 @@ import { type NextRequest, NextResponse } from "next/server"
 import crypto from "crypto"
 import { db } from "@/lib/db"
 import { getSettings } from "@/lib/database";
-import { paddleRefundEvents, quotes, users, aiDocuments  } from "@/lib/schema"
+import { paddleRefundEvents, quotes, users  } from "@/lib/schema"
 import { and, eq,  or, sql } from "drizzle-orm"
-import { sendEmail, createAIDocumentPurchaseEmail, createAdminNotificationEmail, getAdminEmail } from '@/lib/email';
 import { revalidatePath } from 'next/cache';
-import { v4 as uuidv4 } from 'uuid';
 import { markPaymentGatewayAttempt } from '@/core/payment-rotation';
 
 type NormalizedRefundEvent = {
@@ -161,151 +159,6 @@ async function handlePaymentSucceeded(data: any) {
       }).catch(err => console.error("Error calling send-confirmation:", err));
 
     } 
-    // Handle AI Document
-    else if (
-      customData.document_id ||
-      customData.doc_details ||
-      customData.document_details
-    ) {
-      if (customData.document_id) {
-        const documentId = Number(customData.document_id);
-        if (!Number.isFinite(documentId)) {
-          console.error("Invalid document_id in custom_data:", customData.document_id);
-          return;
-        }
-
-        const updatedDocs = await db
-          .update(aiDocuments)
-          .set({
-            status: "paid",
-            paymentIntentId: transactionId,
-          })
-          .where(
-            and(
-              eq(aiDocuments.id, documentId),
-              eq(aiDocuments.status, "pending"),
-            ),
-          )
-          .returning({
-            id: aiDocuments.id,
-            uuid: aiDocuments.uuid,
-            prompt: aiDocuments.prompt,
-            email: aiDocuments.email,
-            amount: aiDocuments.amount,
-            content: aiDocuments.content,
-          });
-
-        if (updatedDocs.length === 0) {
-          console.log(`AI Document ${documentId} was already processed or not found.`);
-          return;
-        }
-
-        const doc = updatedDocs[0];
-        const emailName = doc.email?.split("@")[0] || "Customer";
-        const docAmount = Number(doc.amount || 0);
-
-        const downloadLink = `${process.env.NEXT_PUBLIC_BASE_URL}/api/ai-documents/download-pdf/${doc.uuid}`;
-        const emailData = await createAIDocumentPurchaseEmail(
-          emailName,
-          "",
-          transactionId,
-          new Date().toLocaleDateString(),
-          docAmount,
-          doc.prompt || "AI Document",
-          downloadLink,
-          doc.content || undefined
-        );
-
-        if (doc.email) {
-          await sendEmail({
-            to: doc.email,
-            subject: emailData.subject,
-            html: emailData.html,
-          });
-
-          const adminNotificationData = await createAdminNotificationEmail(
-            "ai_document",
-            emailName,
-            doc.email,
-            docAmount,
-            `Document Type: ${doc.prompt || "AI Document"}`
-          );
-          const adminEmail = await getAdminEmail();
-          await sendEmail({
-            to: adminEmail,
-            subject: adminNotificationData.subject,
-            html: adminNotificationData.html,
-          });
-        }
-        return;
-      }
-      const docDetailsStr = customData.doc_details || customData.document_details;
-      const userDetailsStr = customData.user_details;
-
-      if (!docDetailsStr || !userDetailsStr) {
-        console.error("Missing doc_details or user_details in custom_data");
-        return;
-      }
-
-      const docDetails = typeof docDetailsStr === 'string' ? JSON.parse(docDetailsStr) : docDetailsStr;
-      const userDetails = typeof userDetailsStr === 'string' ? JSON.parse(userDetailsStr) : userDetailsStr;
-
-      // Check if already processed (check if aiDocuments record with this paymentIntentId exists)
-      const existingDoc = await db.select({ id: aiDocuments.id })
-        .from(aiDocuments)
-        .where(eq(aiDocuments.paymentIntentId, transactionId))
-        .limit(1);
-
-      if (existingDoc.length > 0) {
-        console.log(`AI Document already processed for transaction ${transactionId}`);
-        return;
-      }
-
-      const newDocument = await db.insert(aiDocuments).values({
-        uuid: uuidv4(),
-        prompt: docDetails.prompt,
-        content: docDetails.content,
-        email: userDetails.email,
-        userId: userDetails.id,
-        amount: docDetails.price,
-        status: 'paid',
-        paymentIntentId: transactionId,
-      }).returning({ id: aiDocuments.id, uuid: aiDocuments.uuid });
-
-      const documentUuid = newDocument[0].uuid;
-
-      const downloadLink = `${process.env.NEXT_PUBLIC_BASE_URL}/api/ai-documents/download-pdf/${documentUuid}`;
-      const emailData = await createAIDocumentPurchaseEmail(
-        userDetails.firstName,
-        userDetails.lastName,
-        transactionId,
-        new Date().toLocaleDateString(),
-        docDetails.price,
-        docDetails.prompt,
-        downloadLink,
-        docDetails.content,
-      );
-
-      await sendEmail({
-        to: userDetails.email,
-        subject: emailData.subject,
-        html: emailData.html,
-      });
-
-      const adminNotificationData = await createAdminNotificationEmail(
-        "ai_document",
-        userDetails.firstName,
-        userDetails.email,
-        docDetails.price,
-        `Document Type: ${docDetails.prompt}`
-      );
-      const adminEmail = await getAdminEmail();
-      await sendEmail({
-        to: adminEmail,
-        subject: adminNotificationData.subject,
-        html: adminNotificationData.html,
-      });
-    }
   } catch (error) {
     console.error("Error processing handlePaymentSucceeded:", error);
   }

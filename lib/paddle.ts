@@ -19,14 +19,14 @@ export async function getPaddleApiKey(): Promise<string> {
 }
 
 export async function getPaddleEnvironment(): Promise<Environment> {
-    const paddleSettings = await db.query.settings.findFirst({
-        where: eq(settingsTable.param, 'paddle'),
-    });
-    if (!paddleSettings || !paddleSettings.value) {
-        return Environment.sandbox; // Default to sandbox
-    }
-    const paddleConfig = parseSettingsValue(paddleSettings.value);
-    return paddleConfig.environment === 'production' ? Environment.production : Environment.sandbox;
+  const paddleSettings = await db.query.settings.findFirst({
+    where: eq(settingsTable.param, 'paddle'),
+  });
+  if (!paddleSettings || !paddleSettings.value) {
+    return Environment.sandbox; // Default to sandbox
+  }
+  const paddleConfig = parseSettingsValue(paddleSettings.value);
+  return paddleConfig.environment === 'production' ? Environment.production : Environment.sandbox;
 }
 
 export async function getPaddleClientToken(): Promise<string> {
@@ -80,13 +80,13 @@ export async function updatePaddleProductId(productId: string): Promise<void> {
 let paddleInstance: Paddle | null = null;
 
 export async function getPaddleInstance(): Promise<Paddle> {
-    if (paddleInstance) {
-        return paddleInstance;
-    }
-
-    const apiKey = await getPaddleApiKey();
-    const environment = await getPaddleEnvironment();
-
-    paddleInstance = new Paddle(apiKey, { environment });
+  if (paddleInstance) {
     return paddleInstance;
+  }
+
+  const apiKey = await getPaddleApiKey();
+  const environment = await getPaddleEnvironment();
+
+  paddleInstance = new Paddle(apiKey, { environment });
+  return paddleInstance;
 }

@@ -155,6 +155,7 @@ const StripePayment = React.forwardRef(({ quoteData, user, quote, onProcessingCh
       onProcessingChange(true);
       let doNotRotate = false;
       try {
+        const flp_checksum = Cookies.get('flp_checksum');
 
         // Create the Radar Session
         const radarSession = await stripe.createRadarSession();
