@@ -104,7 +104,8 @@ export default function GetQuotePage() {
   })
 
   const [vehicle, setVehicle] = useState(null)
-  const [addresses, setAddresses] = useState([])
+  const [addresses, setAddresses] = useState<{ address_selector: string }[]>([])
+  const [selectedAddress, setSelectedAddress] = useState("")
   const [showAddresses, setShowAddresses] = useState(false)
   const [showQuote, setShowQuote] = useState(false)
   const [quote, setQuote] = useState(null)
@@ -437,6 +438,7 @@ export default function GetQuotePage() {
   const handlePostcodeLookup = async () => {
     // Reset any previous errors
     setPostcodeError("")
+    setSelectedAddress("")
 
     // Check if postcode is empty
     if (!formData.postcode.trim()) {
@@ -453,7 +455,8 @@ export default function GetQuotePage() {
         const data = await response.json();
 
         if (data.addresses && data.addresses.length > 0) {
-          setAddresses(data.addresses);
+          const mergedAddresses = [...data.addresses, { address_selector: "Other" }];
+          setAddresses(mergedAddresses);
           setShowAddresses(true);
         } else {
           setPostcodeError("Address not found. Please enter your address manually below.");
@@ -2068,8 +2071,12 @@ export default function GetQuotePage() {
                         SELECT ADDRESS *
                       </label>
                       <select
-                        value={formData.address}
-                        onChange={(e) => handleInputChange("address", e.target.value)}
+                        value={selectedAddress}
+                        onChange={e => {
+                          const addressChoice = e.target.value
+                          setSelectedAddress(addressChoice)
+                          handleInputChange("address", addressChoice === "Other" ? "" : addressChoice)
+                        }}
                         className="w-full h-12 px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500 text-base bg-primary-foreground shadow-sm"
                         required
                       >
@@ -2083,7 +2090,7 @@ export default function GetQuotePage() {
                     </div>
                   )}
 
-                  {postcodeError && (
+                  {(postcodeError || selectedAddress === "Other") && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2 uppercase tracking-wide">
                         ENTER ADDRESS *
