@@ -11,7 +11,7 @@ Invoice-P-…pdf        lib/invoice.ts                     ← public API
    │                        ├── lib/invoice/model.ts     quote + user + payment → InvoiceDocument
    │  rendered by           ├── lib/invoice/theme.ts     palette / type scale / metrics
    │                        ├── lib/invoice/primitives.ts rounded cards, waves, seals, glyphs
-   └────────────────────────lib/invoice/render.ts       the two-page template
+  └────────────────────────lib/invoice/render.ts       invoice + access page
 ```
 
 ## Using it
@@ -47,22 +47,10 @@ and email attachments alike). `generateInvoiceBuffer()` returns a `Buffer`.
 
 ## What the document contains
 
-**Page 1 — the invoice**
-
-| Block | Notes |
-| --- | --- |
-| Masthead | Brand gradient, aurora waves, ticket-perforated edge, logo plate, document title, status chip |
-| Billed to / Invoice details | Customer block and invoice number, issue date, due date, payment method and reference |
-| Policy & vehicle | Vehicle, registration, cover period, cover reason, licence |
-| Amount card | Total, amount in words, tax note, wax-seal PAID / DUE stamp |
-| Charges table | Description, quantity, unit price, amount; discount rows are highlighted; continues onto new pages when long |
-| Totals | Subtotal, discount, tax, total, amount paid, balance due (dark pill echoes the hero card) |
-| Footer | Legal entity, registration/VAT, support email, website, page number, generation timestamp |
-
-**Page 2 — documents & cover information**
-
-Recap card, payment summary + terms, "how to access your documents" steps,
-"what's included" checklist, "important information" bullets and a help card.
+Two pages: the first contains the site-name banner, invoice number and date,
+invoice/delivery recipient details, a description and amount table, subtotal,
+total, and a short footer. The second contains document-access instructions
+and the important information shown in the previous invoice sample.
 
 ## Design system
 
@@ -124,7 +112,7 @@ Rendered samples live in `docs/` (regenerate with `pnpm invoice:preview`):
 
 ```bash
 pnpm invoice:preview   # writes tmp/invoice-preview/*.pdf (paid, unpaid, tax, edge case)
-pnpm invoice:verify    # 57 checks: helpers, arithmetic, page counts, adversarial inputs
+  pnpm invoice:verify    # checks helpers, arithmetic, two-page output and edge cases
 ```
 
 `scripts/preview-invoice.ts` renders without a database, so design changes can

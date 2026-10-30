@@ -9,7 +9,7 @@
  *      non-Latin names, no crash on missing customer data or empty quotes
  *   2. the printed arithmetic balances: subtotal - discount + tax = total
  *   3. paid invoices have a zero balance, unpaid ones a positive one
- *   4. typical invoices are two pages (invoice + information), never more
+ *   4. every invoice includes the sales invoice and document-access page
  *   5. money, dates and amount-in-words helpers behave
  */
 
@@ -95,7 +95,7 @@ interface Case {
     quoteData: any;
     user: any;
     options?: InvoiceOptions;
-    pages: 'two' | 'atLeastTwo';
+    pages: number;
 }
 
 const cases: Case[] = [
@@ -114,14 +114,14 @@ const cases: Case[] = [
                 amount: 24.51,
             },
         },
-        pages: 'two',
+        pages: 2,
     },
     {
         name: 'unpaid invoice',
         quoteData: baseQuote,
         user,
         options: { payment: { paid: false, status: 'pending' } },
-        pages: 'two',
+        pages: 2,
     },
     {
         name: 'emoji + cyrillic + em dash in every field',
@@ -139,21 +139,21 @@ const cases: Case[] = [
         },
         user: { ...user, email: 'иван@пример.рф' },
         options: { payment: { paid: true, method: 'stripe', amount: 24.51 } },
-        pages: 'two',
+        pages: 2,
     },
     {
         name: 'missing customer data / empty user',
         quoteData: { total: 10, customerData: {} },
         user: {},
         options: {},
-        pages: 'two',
+        pages: 2,
     },
     {
         name: 'empty quote',
         quoteData: {},
         user: null,
         options: {},
-        pages: 'two',
+        pages: 2,
     },
     {
         name: 'extreme amounts and long strings',
@@ -179,7 +179,7 @@ const cases: Case[] = [
                 amount: 9876543.21,
             },
         },
-        pages: 'two',
+        pages: 2,
     },
     {
         name: 'many line items (tax + discount)',
@@ -201,7 +201,7 @@ const cases: Case[] = [
                 amount: 1000,
             },
         },
-        pages: 'atLeastTwo',
+        pages: 2,
     },
 ];
 
@@ -302,10 +302,10 @@ async function main() {
         try {
             const { bytes, pdf, document } = await renderCase(testCase);
             const pages = pdf.getPages().length;
-            check(`${testCase.name}: renders`, bytes.byteLength > 4000, `${bytes.byteLength} bytes`);
+            check(`${testCase.name}: renders`, bytes.byteLength > 1000, `${bytes.byteLength} bytes`);
             check(
-                `${testCase.name}: ${testCase.pages === 'two' ? 'exactly 2' : 'at least 2'} pages`,
-                testCase.pages === 'two' ? pages === 2 : pages >= 2,
+                `${testCase.name}: exactly ${testCase.pages} page${testCase.pages === 1 ? '' : 's'}`,
+                pages === testCase.pages,
                 `${pages} pages`
             );
             check(`${testCase.name}: balance due is never negative`, document.totals.balanceDue >= 0);

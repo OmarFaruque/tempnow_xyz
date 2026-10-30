@@ -1,24 +1,6 @@
 /**
- * The invoice template itself.
- *
- * Visual language (v2 — "luxury statement"):
- * - full-bleed masthead with a horizontal brand gradient, a soft aurora wave
- *   and a ticket-perforated bottom edge
- * - a white "logo plate" so any customer logo stays readable on colour
- * - a policy/vehicle summary card
- * - a dark hero card carrying the amount payable, with a wax-seal style stamp
- *   that flips from PAID to DUE
- * - a clean, hairline-separated items table with right-aligned money columns
- * - a balanced totals block and a legal footer
- * - a second page: recap, payment summary, delivery steps, inclusions,
- *   important information and a help card
- *
- * Everything is drawn with vector primitives (no HTML, no headless browser),
- * so the PDF stays small, sharp at any zoom, and runs on every runtime.
- *
- * Layout note: page 1 content is bounded by `metrics.footerHeight` — blocks
- * that would collide with the footer (`drawClosingNote`) are skipped rather
- * than allowed to overlap.
+ * Render the sales invoice and its document-access information page with
+ * pdf-lib vector drawing, matching the previous two-page invoice structure.
  */
 
 import {
@@ -26,6 +8,7 @@ import {
     PDFFont,
     PDFPage,
     StandardFonts,
+    rgb,
 } from 'pdf-lib';
 import { loadInvoiceLogo, type InvoiceLogo } from './assets';
 import { formatMoney, safeText, truncate, wrapText } from './format';
@@ -124,82 +107,222 @@ export interface RenderInvoiceOptions {
     document: InvoiceDocument;
     branding: InvoiceBranding;
     logo?: InvoiceLogo | null;
-    /** Set to `false` to render the single-page invoice only. */
+    /** @deprecated The standard document-access page is always included. */
     includeInformationPage?: boolean;
 }
 
-/**
- * Render the invoice into `pdf`: two A4 pages (invoice + information page).
- */
+function renderClassicInvoice(
+    pdf: PDFDocument,
+    doc: InvoiceDocument,
+    branding: InvoiceBranding,
+    fonts: Fonts
+): void {
+    const page = pdf.addPage();
+    const { width, height } = page.getSize();
+    const margin = 56;
+    const right = width - margin;
+    const primary = rgb(
+        Number.parseInt(branding.primaryColor.slice(1, 3), 16) / 255,
+        Number.parseInt(branding.primaryColor.slice(3, 5), 16) / 255,
+        Number.parseInt(branding.primaryColor.slice(5, 7), 16) / 255
+    );
+    const ink = rgb(15 / 255, 23 / 255, 42 / 255);
+    const muted = rgb(100 / 255, 116 / 255, 139 / 255);
+    const rule = rgb(226 / 255, 232 / 255, 240 / 255);
+    const lineTop = (top: number, x1 = margin, x2 = right) => {
+        page.drawLine({ start: { x: x1, y: height - top }, end: { x: x2, y: height - top }, color: rule, thickness: 0.7 });
+    };
+    const text = (value: string, x: number, top: number, size: number, font = fonts.regular, color = ink) => {
+        page.drawText(safeText(value), { x, y: height - top - size, size, font, color });
+    };
+    const rightText = (value: string, x: number, top: number, size: number, font = fonts.regular, color = ink) => {
+        const clean = safeText(value);
+        text(clean, x - font.widthOfTextAtSize(clean, size), top, size, font, color);
+    };
+    const wrapped = (value: string, x: number, top: number, maxWidth: number, size: number, font = fonts.regular, color = muted, maxLines = 3) => {
+        const lines = wrapText(value, font, size, maxWidth).slice(0, maxLines);
+        lines.forEach((line, index) => text(line, x, top + index * (size + 3), size, font, color));
+        return lines.length * (size + 3);
+    };
+
+    page.drawRectangle({ x: 0, y: height - 82, width, height: 82, color: primary });
+    const siteName = safeText(branding.siteName).toUpperCase();
+    const brandSize = 23;
+    text(siteName, (width - fonts.bold.widthOfTextAtSize(siteName, brandSize)) / 2, 30, brandSize, fonts.bold, rgb(0.96, 0.96, 0.96));
+
+    text('SALES INVOICE', margin, 120, 20, fonts.bold, ink);
+    text(`Invoice #: ${doc.invoiceNumber}`, margin, 153, 10, fonts.regular, muted);
+    text(`Date: ${[doc.issueDateText, doc.issueTimeText].filter(Boolean).join(' - ')}`, margin, 169, 10, fonts.regular, muted);
+
+    const colGap = 36;
+    const colWidth = (right - margin - colGap) / 2;
+    const secondCol = margin + colWidth + colGap;
+    text('INVOICE TO', margin, 213, 9, fonts.bold, primary);
+    text('DELIVER TO', secondCol, 213, 9, fonts.bold, primary);
+    for (const x of [margin, secondCol]) {
+        text(doc.buyer.displayName, x, 229, 10, fonts.bold, ink);
+        let recipientTop = 245;
+        if (doc.buyer.email) {
+            text(doc.buyer.email, x, recipientTop, 9, fonts.regular, muted);
+            recipientTop += 14;
+        }
+        for (const address of doc.buyer.addressLines) {
+            recipientTop += wrapped(address, x, recipientTop, colWidth, 9, fonts.regular, muted, 2);
+        }
+    }
+
+    let tableTop = 326;
+    lineTop(tableTop);
+    const amountX = right;
+    const unitX = right - 104;
+    const qtyX = right - 172;
+    text('DESCRIPTION', margin, tableTop + 12, 9, fonts.bold, ink);
+    rightText('QTY', qtyX, tableTop + 12, 9, fonts.bold, ink);
+    rightText('UNIT PRICE', unitX, tableTop + 12, 9, fonts.bold, ink);
+    rightText('AMOUNT', amountX, tableTop + 12, 9, fonts.bold, ink);
+    tableTop += 34;
+    lineTop(tableTop - 8);
+
+    for (const item of doc.items.slice(0, 6)) {
+        text(item.description, margin, tableTop, 10, fonts.bold, ink);
+        rightText(String(item.quantity), qtyX, tableTop, 9, fonts.regular, ink);
+        rightText(formatMoney(item.unitPrice, doc.currency), unitX, tableTop, 9, fonts.regular, ink);
+        rightText(formatMoney(item.amount, doc.currency), amountX, tableTop, 10, fonts.bold, ink);
+        let detailTop = tableTop + 15;
+        for (const detail of item.details.slice(0, 2)) {
+            const used = wrapped(detail, margin, detailTop, qtyX - margin - 24, 8, fonts.regular, muted, 1);
+            detailTop += Math.max(used, 10);
+        }
+        tableTop = Math.max(tableTop + 25, detailTop + 5);
+        lineTop(tableTop - 5);
+        tableTop += 9;
+    }
+
+    const totalsTop = Math.max(tableTop + 16, 440);
+    const totalsLabelX = right - 155;
+    text('Subtotal:', totalsLabelX, totalsTop, 10, fonts.regular, muted);
+    rightText(formatMoney(doc.totals.subtotal, doc.currency), right, totalsTop, 10, fonts.bold, ink);
+    lineTop(totalsTop + 25, totalsLabelX, right);
+    text('Total:', totalsLabelX, totalsTop + 38, 12, fonts.bold, ink);
+    rightText(formatMoney(doc.totals.total, doc.currency), right, totalsTop + 36, 12, fonts.bold, primary);
+
+    const footerTop = height - 58;
+    lineTop(footerTop);
+    const copyright = `© ${new Date().getFullYear()} ${safeText(branding.siteName)}`;
+    const support = 'Please contact us through our website contact page for support.';
+    text(copyright, (width - fonts.regular.widthOfTextAtSize(copyright, 8)) / 2, footerTop + 12, 8, fonts.regular, muted);
+    text(support, (width - fonts.regular.widthOfTextAtSize(support, 8)) / 2, footerTop + 25, 8, fonts.regular, muted);
+}
+
+/** Render the information page that follows the sales invoice. */
+function renderAccessInstructionsPage(
+    pdf: PDFDocument,
+    branding: InvoiceBranding,
+    fonts: Fonts
+): void {
+    const page = pdf.addPage();
+    const { width, height } = page.getSize();
+    const margin = 56;
+    const contentWidth = width - margin * 2;
+    const primary = rgb(
+        Number.parseInt(branding.primaryColor.slice(1, 3), 16) / 255,
+        Number.parseInt(branding.primaryColor.slice(3, 5), 16) / 255,
+        Number.parseInt(branding.primaryColor.slice(5, 7), 16) / 255
+    );
+    const ink = rgb(15 / 255, 23 / 255, 42 / 255);
+    const muted = rgb(100 / 255, 116 / 255, 139 / 255);
+    const light = rgb(248 / 255, 250 / 255, 252 / 255);
+    const rule = rgb(226 / 255, 232 / 255, 240 / 255);
+    const text = (value: string, x: number, top: number, size: number, font = fonts.regular, color = ink) => {
+        page.drawText(safeText(value), { x, y: height - top - size, size, font, color });
+    };
+    const wrapped = (value: string, x: number, top: number, maxWidth: number, size: number) => {
+        const lines = wrapText(value, fonts.regular, size, maxWidth);
+        lines.forEach((line, index) => text(line, x, top + index * (size + 3), size, fonts.regular, muted));
+        return lines.length * (size + 3);
+    };
+
+    page.drawRectangle({ x: 0, y: height - 82, width, height: 82, color: primary });
+    const siteName = safeText(branding.siteName).toUpperCase();
+    const brandSize = 23;
+    text(siteName, (width - fonts.bold.widthOfTextAtSize(siteName, brandSize)) / 2, 30, brandSize, fonts.bold, rgb(0.96, 0.96, 0.96));
+
+    text('Document Access Instructions', margin, 120, 17, fonts.bold, ink);
+    text('You can access your documents in two ways:', margin, 153, 10, fonts.bold, ink);
+
+    const steps = [
+        {
+            title: 'Account Dashboard',
+            body: 'Log in to your account and navigate to your dashboard where all your purchased documents are available for download.',
+        },
+        {
+            title: 'Confirmation Email',
+            body: 'Click the "View Documents" button in the confirmation email sent to your registered email address for instant access.',
+        },
+    ];
+    let stepTop = 188;
+    for (const [index, step] of steps.entries()) {
+        page.drawCircle({ x: margin + 5, y: height - stepTop - 5, size: 5, color: primary });
+        text(String(index + 1), margin + 2.7, stepTop + 1.5, 7, fonts.bold, rgb(1, 1, 1));
+        text(step.title, margin + 24, stepTop, 10, fonts.bold, ink);
+        const bodyHeight = wrapped(step.body, margin + 24, stepTop + 18, contentWidth - 24, 9);
+        stepTop += Math.max(56, bodyHeight + 34);
+    }
+
+    const boxTop = stepTop + 3;
+    const boxHeight = 220;
+    page.drawRectangle({
+        x: margin,
+        y: height - boxTop - boxHeight,
+        width: contentWidth,
+        height: boxHeight,
+        color: light,
+        borderColor: primary,
+        borderWidth: 0.8,
+    });
+    text('Important Information', margin + 16, boxTop + 18, 12, fonts.bold, ink);
+
+    const bulletPoints = [
+        'This is a digital document service. No physical items will be shipped.',
+        'All documents are delivered electronically and are available immediately after payment confirmation.',
+        'Refund Policy: We offer a full refund within 7 days of purchase if you experience any technical issues that prevent you from accessing or using your documents as intended.',
+        'For technical support or refund requests, please contact our support team through the contact page on our website.',
+    ];
+    let bulletTop = boxTop + 44;
+    for (const point of bulletPoints) {
+        const lines = wrapText(point, fonts.regular, 9, contentWidth - 56);
+        page.drawCircle({ x: margin + 19, y: height - bulletTop - 5, size: 1.8, color: primary });
+        lines.forEach((line, index) => text(line, margin + 30, bulletTop + index * 12, 9, fonts.regular, muted));
+        bulletTop += lines.length * 12 + 8;
+    }
+
+    const footerTop = height - 58;
+    page.drawLine({
+        start: { x: margin, y: height - footerTop },
+        end: { x: width - margin, y: height - footerTop },
+        color: rule,
+        thickness: 0.7,
+    });
+    const copyright = `© ${new Date().getFullYear()} ${safeText(branding.siteName)}`;
+    const support = 'For support, visit our website contact page';
+    text(copyright, (width - fonts.regular.widthOfTextAtSize(copyright, 8)) / 2, footerTop + 10, 8, fonts.regular, muted);
+    text(support, (width - fonts.regular.widthOfTextAtSize(support, 8)) / 2, footerTop + 23, 8, fonts.regular, muted);
+}
+
+/** Render the invoice and its document-access information page. */
 export async function renderInvoicePdf(
     pdf: PDFDocument,
     options: RenderInvoiceOptions
 ): Promise<void> {
     const { document: doc, branding } = options;
-    const theme = createInvoiceTheme(branding);
-
     const fonts: Fonts = {
         regular: await pdf.embedFont(StandardFonts.Helvetica),
         bold: await pdf.embedFont(StandardFonts.HelveticaBold),
         oblique: await pdf.embedFont(StandardFonts.HelveticaOblique),
     };
 
-    const logo =
-        options.logo !== undefined ? options.logo : await loadInvoiceLogo(pdf, branding.logoUrl);
-
-    const includeInfoPage = options.includeInformationPage !== false;
-
-    const ctx: Ctx = {
-        doc,
-        theme,
-        fonts,
-        logo: logo ?? null,
-        totalPages: 1,
-    };
-
-    // --- invoice page 1: the fixed "cover" part --------------------------
-    const firstPage = pdf.addPage();
-    drawMasthead(ctx, firstPage);
-
-    const afterParties = drawParties(ctx, firstPage, theme.metrics.headerHeight + 14);
-    const afterCover = drawCoverPanel(ctx, firstPage, afterParties + 14);
-    const afterHero = drawAmountCard(ctx, firstPage, afterCover + 16);
-
-    // --- flowing part: charges → totals → closing note -------------------
-    // The table continues onto new pages when it runs out of room, and the
-    // totals block is never orphaned at the bottom of a page.
-    const invoicePages: PDFPage[] = [firstPage];
-    const flow: Flow = {
-        ctx,
-        pdf,
-        pages: invoicePages,
-        page: firstPage,
-        cursor: afterHero + 12,
-        summaryTitle: `${safeText(doc.documentTitle).toUpperCase()} ${safeText(doc.invoiceNumber)}`,
-    };
-
-    drawChargesTable(flow);
-    drawTotalsSection(flow);
-
-    // --- information page -----------------------------------------------
-    const pages: Array<{ page: PDFPage; kind: 'invoice' | 'info' }> = invoicePages.map((page) => ({
-        page,
-        kind: 'invoice' as const,
-    }));
-
-    if (includeInfoPage) {
-        const infoPage = pdf.addPage();
-        drawCompactMasthead(ctx, infoPage, 'Your documents & cover information');
-        const top = drawRecapCard(ctx, infoPage, theme.metrics.compactHeaderHeight + 26);
-        const afterPayment = drawPaymentSummary(ctx, infoPage, top + 26);
-        const afterSteps = drawAccessSteps(ctx, infoPage, afterPayment + 26);
-        const afterSections = drawSectionsGrid(ctx, infoPage, afterSteps + 24);
-        drawHelpCard(ctx, infoPage, afterSections + 24);
-        pages.push({ page: infoPage, kind: 'info' });
-    }
-
-    ctx.totalPages = pages.length;
-    pages.forEach((entry, index) => drawPageFooter(ctx, entry.page, index + 1));
+    renderClassicInvoice(pdf, doc, branding, fonts);
+    renderAccessInstructionsPage(pdf, branding, fonts);
 }
 
 /* ------------------------------------------------------------------------ */
