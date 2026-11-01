@@ -347,7 +347,7 @@ body { margin:0; padding:24px 12px; background-color:#f3f6f8; font-family:-apple
     <td style="background:#0f172a; padding:24px 32px; border-top:1px solid #1e293b; text-align:left;">
       <div style="font-size:13px; font-weight:700; color:#ffffff; letter-spacing:0.06em; text-transform:uppercase;">TEMPNOW</div>
       <div style="margin-top:6px; font-size:12px; color:#94a3b8; line-height:1.7;">
-        Churchill Digital &middot; Support: support@tempnow.xyz &middot; tempnow.xyz
+        Churchill Digital &middot; Support: support@tempnow.io &middot; tempnow.io
       </div>
       <div style="margin-top:4px; font-size:11px; color:#64748b;">If you did not request this, please ignore this email.</div>
       <div style="margin-top:10px; font-size:11px; color:#475569;">&copy; ${year} Churchill Digital - FZCO. All rights reserved.</div>
