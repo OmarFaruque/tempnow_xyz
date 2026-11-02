@@ -2,8 +2,9 @@
 
 
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
+import { VerificationCodeInput } from "@/components/auth/verification-code-input";
 import { Input } from "@/components/ui/input"
 import Link from "next/link"
 import { useAuth } from "@/context/auth"
@@ -26,6 +27,7 @@ export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true)
   const [showVerification, setShowVerification] = useState(false)
   const settings = useSettings()
+  const verificationInputRef = useRef<HTMLInputElement>(null)
   const [verificationCode, setVerificationCode] = useState(["", "", "", "", "", ""])
   const [timeLeft, setTimeLeft] = useState(60)
   const [canResend, setCanResend] = useState(false)
@@ -151,39 +153,6 @@ export default function LoginPage() {
   }
 
 
-
-  const handleVerificationCodeChange = (index: number, value: string) => {
-    if (value.length > 1) return;
-
-    const newCode = [...verificationCode];
-    newCode[index] = value;
-    setVerificationCode(newCode);
-
-    // Auto-focus next input
-    if (value && index < 5) {
-      const nextInput = document.getElementById(`code-${index + 1}`);
-      nextInput?.focus();
-    }
-  };
-
-  const handleVerificationKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === "Backspace" && !verificationCode[index] && index > 0) {
-      const prevInput = document.getElementById(`code-${index - 1}`)
-      prevInput?.focus()
-    }
-  }
-
-  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    const pastedText = e.clipboardData.getData('text');
-    if (/^\d{6}$/.test(pastedText)) {
-      const newCode = pastedText.split('');
-      setVerificationCode(newCode);
-      const lastInput = document.getElementById('code-5');
-      lastInput?.focus();
-    }
-  };
-
   const handleVerificationSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const code = verificationCode.join("");
@@ -209,7 +178,7 @@ export default function LoginPage() {
       if (!response.ok) {
         showError("Verification Failed", "An unknown error occurred.");
         setVerificationCode(["", "", "", "", "", ""]);
-        document.getElementById("code-0")?.focus();
+        verificationInputRef.current?.focus({ preventScroll: true });
       } else {
         login({ user: data.user, token: data.token });
         showSuccess("Email Verified!", "Your account is now active. Proceeding to payment...");
@@ -411,12 +380,10 @@ export default function LoginPage() {
         </div>
       </main>
 
-
-
       {/* Email Verification Popup */}
       {showVerification && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-sm sm:max-w-md w-full shadow-2xl">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 overflow-y-auto p-4">
+          <div className="bg-white border border-slate-800 rounded-2xl p-6 max-h-[calc(100dvh-2rem)] overflow-y-auto max-w-sm sm:max-w-md w-full shadow-2xl">    
             <div className="text-center mb-6">
               <div className="w-16 h-16 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Shield className="w-8 h-8 text-teal-600" />
@@ -428,27 +395,11 @@ export default function LoginPage() {
 
             <form onSubmit={handleVerificationSubmit} className="space-y-6">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3 text-center">
-                  Enter Verification Code
-                </label>
-                <div className="flex justify-center space-x-2 flex-wrap">
-                  {verificationCode.map((digit, index) => (
-                    <Input
-                      key={index}
-                      id={`code-${index}`}
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]"
-                      maxLength={1}
-                      value={digit}
-                      onChange={(e) => handleVerificationCodeChange(index, e.target.value)}
-                      onKeyDown={(e) => handleVerificationKeyDown(index, e)}
-                      onPaste={handlePaste}
-                      className="w-10 h-12 text-center text-xl font-bold border-2 border-gray-200 focus:border-teal-500 rounded-lg"
-                      autoComplete="off"
-                    />
-                  ))}
-                </div>
+                <VerificationCodeInput
+                    ref={verificationInputRef}
+                    value={verificationCode}
+                    onChange={setVerificationCode}
+                  />
               </div>
 
 

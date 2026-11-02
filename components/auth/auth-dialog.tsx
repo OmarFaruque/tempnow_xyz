@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/context/auth";
 import {
   Dialog,
   DialogContent,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { VerificationCodeInput } from "@/components/auth/verification-code-input";
 import { Input } from "@/components/ui/input";
 import { Mail, User, ArrowRight, Shield, Clock, RefreshCw } from "lucide-react";
 import Link from "next/link";
@@ -34,6 +35,7 @@ export function AuthDialog({
   const [isLogin, setIsLogin] = useState(false);
   const [showVerification, setShowVerification] = useState(false);
 
+  const verificationInputRef = useRef<HTMLInputElement>(null);
   const [verificationCode, setVerificationCode] = useState(["", "", "", "", "", ""]);
   const [timeLeft, setTimeLeft] = useState(60);
   const [canResend, setCanResend] = useState(false);
@@ -164,37 +166,6 @@ export function AuthDialog({
     }
   };
 
-  const handleVerificationCodeChange = (index: number, value: string) => {
-    if (value.length > 1) return;
-
-    const newCode = [...verificationCode];
-    newCode[index] = value;
-    setVerificationCode(newCode);
-
-    if (value && index < 5) {
-      const nextInput = document.getElementById(`code-${index + 1}`);
-      nextInput?.focus();
-    }
-  };
-
-  const handleVerificationKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === "Backspace" && !verificationCode[index] && index > 0) {
-      const prevInput = document.getElementById(`code-${index - 1}`);
-      prevInput?.focus();
-    }
-  };
-
-  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    const pastedText = e.clipboardData.getData('text');
-    if (/^\d{6}$/.test(pastedText)) {
-      const newCode = pastedText.split('');
-      setVerificationCode(newCode);
-      const lastInput = document.getElementById('code-5');
-      lastInput?.focus();
-    }
-  };
-
 
 
   const handleVerificationSubmit = async (e: React.FormEvent) => {
@@ -222,7 +193,7 @@ export function AuthDialog({
         // Replace showError with a more appropriate notification for the dialog
         console.error("Verification Failed", "An unknown error occurred.");
         setVerificationCode(["", "", "", "", "", ""]);
-        document.getElementById("code-0")?.focus();
+        verificationInputRef.current?.focus({ preventScroll: true });
       } else {
         login({ user: data.user, token: data.token }, { redirect: !disableRedirect });
         // Replace showSuccess with a more appropriate notification for the dialog
@@ -278,7 +249,7 @@ export function AuthDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className={`p-0 max-w-md ${isVerifying ? 'backdrop-blur-sm' : ''}`}>
+      <DialogContent className={`max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto max-w-md border-0 bg-transparent p-0 shadow-none [&>button]:right-5 [&>button]:top-5 [&>button]:rounded-lg [&>button]:bg-slate-900/70 [&>button]:text-slate-300 [&>button]:opacity-100 [&>button]:ring-0 [&>button]:hover:bg-slate-800 [&>button]:hover:text-yellow-400 ${isVerifying ? 'backdrop-blur-sm' : ''}`}>
         <div className="sm:rounded-lg overflow-hidden">
           <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-6 py-6 text-white text-center">
             <h2 className="text-2xl font-bold mb-2">{isLogin ? "Welcome Back" : `Join ${settings?.general?.siteName}`}</h2>
@@ -415,30 +386,12 @@ export function AuthDialog({
 
               <form onSubmit={handleVerificationSubmit} className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-3 text-center">
-                    Enter Verification Code
-                  </label>
-                  <div className="flex justify-center space-x-2 flex-wrap">
-                    {verificationCode.map((digit, index) => (
-                      <Input
-                        key={index}
-                        id={`code-${index}`}
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]"
-                        maxLength={1}
-                        value={digit}
-                        onChange={(e) => handleVerificationCodeChange(index, e.target.value)}
-                        onKeyDown={(e) => handleVerificationKeyDown(index, e)}
-                        onPaste={handlePaste}
-                        className="w-10 h-12 text-center text-xl font-bold border-2 border-gray-200 focus:border-teal-500 rounded-lg"
-                        autoComplete="off"
-                      />
-                    ))}
-                  </div>
+                  <VerificationCodeInput
+                    ref={verificationInputRef}
+                    value={verificationCode}
+                    onChange={setVerificationCode}
+                  />
                 </div>
-
-                
 
                 <div className="text-center">
                   {canResend ? (
