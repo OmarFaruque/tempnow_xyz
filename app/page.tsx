@@ -416,7 +416,7 @@ export default function MonzicHomepage() {
                     setMessage("")
                     setManualVehicleMode(true)
                   }}
-                  className="block text-sm font-bold text-slate-500 underline underline-offset-4 decoration-slate-500 transition-colors hover:text-orange-400 hover:decoration-orange-400"
+                  className="block text-sm font-bold text-slate-500 underline underline-offset-4 decoration-slate-500 transition-colors hover:text-teal-600 hover:decoration-teal-600"
                 >
                   Choose vehicle manually
               </button>
