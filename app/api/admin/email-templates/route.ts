@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { settings as settingsTable } from "@/lib/schema";
 import { eq } from "drizzle-orm";
+import { clearSettingsCache } from "@/lib/database";
 
 export const dynamic = "force-dynamic";
 
@@ -62,8 +63,8 @@ export async function POST(request: NextRequest) {
         .values({ param: EMAIL_TEMPLATES_PARAM, value });
     }
 
+    clearSettingsCache();
     
-
     return NextResponse.json({
       success: true,
       message: "Email templates saved successfully",

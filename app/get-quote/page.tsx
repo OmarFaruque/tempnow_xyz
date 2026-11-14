@@ -62,6 +62,36 @@ export default function GetQuotePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const registrationFromHome = searchParams.get("reg")
+
+    // Vehicle chosen through the "Choose vehicle manually" step based finder.
+  // In that flow there is no registration number, so the make/model/variant are
+  // carried through the query string instead.
+  const manualMake = searchParams.get("make")
+  const manualModel = searchParams.get("model")
+  const manualVariant = searchParams.get("variant")
+  const manualYears = searchParams.get("years") || searchParams.get("year")
+  const manualEngine = searchParams.get("engine")
+  const manualFuel = searchParams.get("fuel")
+  const manualType = searchParams.get("type")
+
+  const manualVehicle = useMemo(() => {
+    if (!manualMake || !manualModel) return null
+
+    return {
+      registration: null as string | null,
+      make: manualMake,
+      model: manualModel,
+      variant: manualVariant || "",
+      year: manualYears || "Unknown",
+      engineCapacity: manualEngine || null,
+      fuel: manualFuel || "",
+      color: null as string | null,
+      provider: "manual",
+      vehicleType: manualType || "car",
+    }
+  }, [manualMake, manualModel, manualVariant, manualYears, manualEngine, manualFuel, manualType])
+
+  const hasVehicleDetails = Boolean(registrationFromHome || manualVehicle)
   const [isClient, setIsClient] = useState(false)
 
   useEffect(() => {
@@ -70,10 +100,10 @@ export default function GetQuotePage() {
 
   // Redirect to home if accessed directly without registration parameter
   useEffect(() => {
-    if (isClient && !registrationFromHome) {
+    if (isClient && !hasVehicleDetails) {
       router.push("/")
     }
-  }, [isClient, registrationFromHome, router])
+  }, [isClient, hasVehicleDetails, router])
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   // 1. Replace the existing formData state initialization to include separate hour and minute fields:
@@ -103,7 +133,7 @@ export default function GetQuotePage() {
     modifications: [] as string[],
   })
 
-  const [vehicle, setVehicle] = useState(null)
+  const [vehicle, setVehicle] = useState<any>(manualVehicle)
   const [addresses, setAddresses] = useState<{ address_selector: string }[]>([])
   const [selectedAddress, setSelectedAddress] = useState("")
   const [showAddresses, setShowAddresses] = useState(false)
@@ -205,8 +235,11 @@ export default function GetQuotePage() {
         }
       };
       fetchVehicleData();
+    }else if (manualVehicle) {
+      // Manually selected vehicle - nothing to verify against a registration.
+      setVehicle(manualVehicle);
     }
-  }, [registrationFromHome, router]);
+  }, [registrationFromHome, manualVehicle, router]);
 
   useEffect(() => {
     const view = searchParams.get('view');
@@ -841,7 +874,12 @@ export default function GetQuotePage() {
                     model: vehicle?.model || "",
                     year: vehicle?.year && vehicle.year !== "Unknown" ? vehicle.year : "",
                     engineCC: "1400", // You can add this to vehicle data if needed
-                  },      },
+                    variant: vehicle?.variant || "",
+                    fuel: vehicle?.fuel || "",
+                    vehicleType: vehicle?.vehicleType || "",
+                    
+                  },      
+        },
     }
 
     try {
@@ -1013,7 +1051,7 @@ export default function GetQuotePage() {
   const yearInputRef = useRef<HTMLInputElement>(null);
 
   // If redirecting, show loading state
-  if (!isClient || !registrationFromHome) {
+  if (!isClient || !hasVehicleDetails) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
@@ -1023,8 +1061,6 @@ export default function GetQuotePage() {
       </div>
     )
   }
-
-  
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-teal-50 flex flex-col">
@@ -1089,19 +1125,32 @@ export default function GetQuotePage() {
                     <p className="text-sm text-gray-500 mt-0.5">Vehicle information</p>
                   </div>
                 </div>
+                {registrationFromHome ? (
                 <div className="flex items-center space-x-2 bg-teal-50 px-4 py-2 rounded-full border border-teal-200">
                   <CheckCircle className="w-5 h-5 text-teal-600" />
                   <span className="text-sm font-semibold text-teal-700">Verified</span>
                 </div>
+                ) : (
+                <div className="flex items-center space-x-2 bg-teal-50 px-4 py-2 rounded-full border border-teal-200">
+                  <CheckCircle className="w-4 h-4" />
+                  <span className="text-sm font-medium">Selected by you</span>
+                </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-8">
                 <div className="relative">
                   <div className="text-sm font-medium text-gray-500 mb-3 uppercase tracking-wide">Registration</div>
                   <div className="absolute inset-0 bg-gray-300/20 blur-xl rounded-full"></div>
-                  <div className="relative bg-gradient-to-b from-yellow-300 to-yellow-400 rounded-md px-4 py-3 border-2 border-black inline-block shadow-md hover:shadow-lg transition-shadow">
-                    <div className="font-bold text-black text-xl tracking-widest">{registrationFromHome}</div>
-                  </div>
+                  {registrationFromHome ? (
+                    <div className="relative bg-gradient-to-b from-yellow-300 to-yellow-400 rounded-md px-4 py-3 border-2 border-black inline-block shadow-md hover:shadow-lg transition-shadow">
+                      <div className="font-bold text-black text-xl tracking-widest">{registrationFromHome}</div>
+                    </div>
+                  ):(
+                    <div className="relative">
+                      <p className="text-sm font-semibold text-gray-400">Not provided</p>
+                    </div>
+                  )}
                 </div>
                 <div className="relative">
                   <div className="text-sm font-medium text-gray-500 mb-3 uppercase tracking-wide">Make</div>
@@ -1113,6 +1162,21 @@ export default function GetQuotePage() {
                   <div className="absolute inset-0 bg-gray-300/20 blur-2xl rounded-full"></div>
                   <div className="relative text-xl font-bold text-gray-900 uppercase">{vehicle.model}</div>
                 </div>
+                {!registrationFromHome && (
+                      <>
+                        <div className="relative">
+                          <div className="text-sm font-medium text-gray-500 mb-3 uppercase tracking-wide">Variant</div>
+                          <div className="absolute inset-0 bg-gray-300/20 blur-2xl rounded-full"></div>
+                          <div className="relative text-xl font-bold text-gray-900 uppercase">{vehicle.variant || "—"}</div>
+                          {vehicle.fuel && <p className="text-xs text-gray-500">{vehicle.fuel}</p>}
+                        </div>
+                        <div className="relative">
+                          <div className="text-sm font-medium text-gray-500 mb-3 uppercase tracking-wide">Year</div>
+                          <div className="absolute inset-0 bg-gray-300/20 blur-2xl rounded-full"></div>
+                          <div className="relative text-xl font-bold text-gray-900 uppercase">{vehicle.year || "—"}</div>
+                        </div>
+                      </>
+                  )}
               </div>
             </div>
           )}

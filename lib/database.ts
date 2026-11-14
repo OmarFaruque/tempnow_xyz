@@ -7,7 +7,7 @@ import type { Quote, User } from "./definitions"
 import { desc } from "drizzle-orm"
 
 export async function getPoliciesByUserId(userId: string): Promise<any[]> {
-  const userPolicies = await db.select().from(quotes).where(and(eq(quotes.userId, userId), eq(quotes.paymentStatus, 'paid'))).orderBy(desc(quotes.createdAt))
+  const userPolicies = await db.select().from(quotes).where(and(eq(quotes.userId, parseInt(userId, 10)), eq(quotes.paymentStatus, 'paid'))).orderBy(desc(quotes.createdAt))
 
   const now = new Date();
 
@@ -40,43 +40,80 @@ export async function updateUser(userId: string, updates: Partial<User>): Promis
   return updatedUser || null
 }
 
-export async function getSettings(param: string): Promise<any | null> {
-  noStore();
-  const [setting] = await db.select().from(settings).where(eq(settings.param, param))
-  if (setting && setting.value !== null && setting.value !== undefined) {
-    if (typeof setting.value === 'object') return setting.value;
-    if (typeof setting.value === 'string') {
-      try {
-        return JSON.parse(setting.value)
-      } catch (e) {
-        return setting.value
-      }
+// Settings hardly ever change, so keep one copy in memory instead of
+// asking the database on every request.
+const SETTINGS_TTL = 60 * 1000
+
+type SettingsStore = {
+  data: { [key: string]: any } | null
+  loadedAt: number
+  pending: Promise<{ [key: string]: any }> | null
+}
+
+const globalStore = globalThis as unknown as { __settingsStore?: SettingsStore }
+const settingsStore: SettingsStore =
+  globalStore.__settingsStore || (globalStore.__settingsStore = { data: null, loadedAt: 0, pending: null })
+
+async function loadSettings() {
+  const rows = await db.select().from(settings)
+  const result: { [key: string]: any } = {}
+  for (const row of rows) {
+    if (!row.param || !row.value) continue
+    try {
+      result[row.param] = JSON.parse(row.value)
+    } catch (e) {
+      console.error(`Bad settings value for "${row.param}"`, e)
     }
-    return setting.value;
   }
-  return null
+   return result
+}
+
+export function clearSettingsCache() {
+  settingsStore.data = null
+  settingsStore.loadedAt = 0
+  settingsStore.pending = null
 }
 
 export async function getAllSettings(): Promise<any | null> {
   noStore();
-  const allSettings = await db.select().from(settings);
-  if (!allSettings) return null;
-
-  const settingsObject: { [key: string]: any } = {};
-  for (const setting of allSettings) {
-    if (setting.param && setting.value !== null && setting.value !== undefined) {
-      if (typeof setting.value === 'object') {
-        settingsObject[setting.param] = setting.value;
-      } else if (typeof setting.value === 'string') {
-        try {
-          settingsObject[setting.param] = JSON.parse(setting.value);
-        } catch (e) {
-          settingsObject[setting.param] = setting.value;
-        }
-      } else {
-        settingsObject[setting.param] = setting.value;
-      }
-    }
+  if (settingsStore.data && Date.now() - settingsStore.loadedAt < SETTINGS_TTL) {
+    return settingsStore.data
   }
-  return settingsObject;
+  
+   // if a load is already running, wait for that one
+  if (!settingsStore.pending) {
+    const pending = loadSettings()
+      .then((data) => {
+        if (settingsStore.pending === pending) {
+          settingsStore.data = data
+          settingsStore.loadedAt = Date.now()
+        }
+        return data
+      })
+      .finally(() => {
+        if (settingsStore.pending === pending) settingsStore.pending = null
+      })
+    settingsStore.pending = pending
+  }
+
+  return settingsStore.pending
+}
+
+export async function getSettings(param: string): Promise<any | null> {
+  const all = await getAllSettings()
+  const value = all?.[param]
+  if (value === undefined || value === null) return null
+  // hand out a copy so callers can't change the cached one by accident
+  return typeof value === "object" ? structuredClone(value) : value
+}
+
+// Straight from the database, no cache. For values the app itself rewrites
+// while running (payment quota windows etc).
+export async function getFreshSettings(param: string): Promise<any | null> {
+  noStore();
+  const [setting] = await db.select().from(settings).where(eq(settings.param, param))
+  if (setting && setting.value) {
+    return JSON.parse(setting.value)
+  }
+  return null
 }

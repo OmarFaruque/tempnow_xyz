@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { settings as settingsTable } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { clearSettingsCache } from "@/lib/database";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -157,6 +158,7 @@ export async function POST(request: NextRequest) {
     if (logData.motApi?.mot_scope_url) logData.motApi.mot_scope_url = "[REDACTED]";
     if (logData.motApi?.mot_token_url) logData.motApi.mot_token_url = "[REDACTED]";
 
+    clearSettingsCache();
     revalidatePath('/');
     revalidatePath('/administrator');
     revalidatePath('/api/admin/settings');

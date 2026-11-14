@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { User } from "@/lib/definitions"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useToast } from "@/hooks/use-toast"
 import {
   UserIcon,
   FileTextIcon,
@@ -22,6 +23,7 @@ import {
   Phone,
   Mail,
   Shield,
+  Plus,
 } from "lucide-react"
 
 const PoliciesSection = () => {
@@ -32,6 +34,11 @@ const PoliciesSection = () => {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedPolicy, setSelectedPolicy] = useState(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [regPolicy, setRegPolicy] = useState(null)
+  const [regInput, setRegInput] = useState("")
+  const [regError, setRegError] = useState("")
+  const [savingReg, setSavingReg] = useState(false)
+  const { toast } = useToast()
 
   useEffect(() => {
     const fetchData = async () => {
@@ -100,7 +107,7 @@ const PoliciesSection = () => {
       policy.policyNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
       policy.vehicleMake.toLowerCase().includes(searchTerm.toLowerCase()) ||
       policy.vehicleModel.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      policy.regNumber.toLowerCase().includes(searchTerm.toLowerCase()),
+      (policy.regNumber || "").toLowerCase().includes(searchTerm.toLowerCase()),
   )
 
   const formatDate = (dateString) => {
@@ -153,6 +160,72 @@ const PoliciesSection = () => {
   const closeModal = () => {
     setIsModalOpen(false)
     setSelectedPolicy(null)
+  }
+
+  const openRegModal = (policy) => {
+    setRegPolicy(policy)
+    setRegInput("")
+    setRegError("")
+  }
+
+  const closeRegModal = () => {
+    if (savingReg) return
+    setRegPolicy(null)
+  }
+
+  const saveRegistration = async (e) => {
+    e.preventDefault()
+    const registration = regInput.replace(/\s+/g, "").toUpperCase()
+    if (registration.length < 2) {
+      setRegError("Please enter your registration number.")
+      return
+    }
+
+    setSavingReg(true)
+    setRegError("")
+    try {
+      const response = await fetch(`/api/dashboard/policies/${regPolicy.id}/registration`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ registration }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setRegError(data.error || "Could not save the registration number.")
+        return
+      }
+
+      setPolicies((prev) => prev.map((p) => (p.id === regPolicy.id ? { ...p, regNumber: data.regNumber } : p)))
+      if (selectedPolicy?.id === regPolicy.id) {
+        setSelectedPolicy({ ...selectedPolicy, regNumber: data.regNumber })
+      }
+      setRegPolicy(null)
+      toast({ title: "Registration saved", description: `${data.regNumber} has been added to your document.` })
+    } catch (err) {
+      setRegError("Could not save the registration number. Please try again.")
+    } finally {
+      setSavingReg(false)
+    }
+  }
+
+  // Orders made through the make/model finder have no registration yet.
+  const renderRegistration = (policy, large = false) => {
+    if (policy.regNumber) {
+      return <p className={`font-medium ${large ? "text-lg" : ""}`}>{policy.regNumber}</p>
+    }
+    if (getPolicyStatus(policy) === "expired") {
+      return <p className="font-medium text-gray-500">Not added</p>
+    }
+    return (
+      <button
+        type="button"
+        onClick={() => openRegModal(policy)}
+        className="mt-0.5 inline-flex items-center gap-1 rounded-md border border-orange-500/40 px-2 py-1 text-xs font-semibold text-orange-400 hover:bg-orange-500/10 transition-colors"
+      >
+        <Plus className="w-3.5 h-3.5" />
+        Add registration
+      </button>
+    )
   }
 
   if (loading) {
@@ -268,7 +341,7 @@ const PoliciesSection = () => {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                   <div>
                     <span className="text-gray-600">Registration</span>
-                    <p className="font-medium text-gray-900">{policy.regNumber}</p>
+                     {renderRegistration(policy)}
                   </div>
                   <div>
                     <span className="text-gray-600">Make & Model</span>
@@ -445,7 +518,7 @@ const PoliciesSection = () => {
                     <div className="grid grid-cols-1 gap-4">
                       <div>
                         <p className="text-sm text-gray-600 mb-1">Registration</p>
-                        <p className="font-medium text-gray-900 text-lg">{selectedPolicy.regNumber}</p>
+                        {renderRegistration(selectedPolicy, true)}
                       </div>
                     </div>
 
@@ -519,6 +592,54 @@ const PoliciesSection = () => {
                 </Link>
               </div>
             </div>
+          )}
+        </DialogContent>
+      </Dialog>
+       <Dialog open={!!regPolicy} onOpenChange={(open) => !open && closeRegModal()}>
+        <DialogContent className="max-w-md bg-gray-900 border border-teal-500/30 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold text-white">Add registration number</DialogTitle>
+          </DialogHeader>
+          {regPolicy && (
+            <form onSubmit={saveRegistration} className="space-y-4">
+              <p className="text-sm text-gray-400">
+                Document {regPolicy.policyNumber} · {regPolicy.vehicleMake} {regPolicy.vehicleModel}
+              </p>
+              <div>
+                <Input
+                  autoFocus
+                  value={regInput}
+                  onChange={(e) => {
+                    setRegInput(e.target.value.toUpperCase().replace(/[^A-Z0-9 ]/g, "").slice(0, 8))
+                    setRegError("")
+                  }}
+                  placeholder="AB12 CDE"
+                  className="h-12 bg-teal-400/20 border-2 border-gray-900 text-slate-100 placeholder:text-gray-900/40 text-center text-xl font-bold tracking-widest uppercase"
+                />
+                {regError && <p className="mt-2 text-sm text-teal-400">{regError}</p>}
+              </div>
+              <p className="text-xs text-gray-500">
+                Please check it carefully. Once saved, the registration number cannot be changed from here.
+              </p>
+              <div className="flex gap-3">
+                <Button
+                  type="button"
+                  onClick={closeRegModal}
+                  disabled={savingReg}
+                  variant="outline"
+                  className="flex-1 border-teal-500/30 text-teal-400 hover:text-teal-200 hover:bg-teal-500/10 bg-transparent"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={savingReg}
+                  className="flex-1 bg-gradient-to-r from-teal-500 to-teal-600 hover:from-teal-600 hover:to-teal-700 text-white"
+                >
+                  {savingReg ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            </form>
           )}
         </DialogContent>
       </Dialog>

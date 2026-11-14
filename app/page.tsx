@@ -28,10 +28,12 @@ import { checkBlacklist } from "@/lib/blacklist"
 import Image from "next/image"
 import { useSettings } from "@/context/settings"
 import { useAuth } from "@/context/auth"
+import { VehicleFinder } from "@/components/vehicle-finder"
 
 export default function MonzicHomepage() {
   const [message, setMessage] = useState("")
   const [mainInput, setMainInput] = useState("")
+  const [manualVehicleMode, setManualVehicleMode] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null)
   const router = useRouter()
@@ -361,9 +363,31 @@ export default function MonzicHomepage() {
               </div>
             )}
 
+            <div className="w-full bg-white/95 backdrop-blur-md p-6 sm:p-8 rounded-2xl shadow-2xl shadow-teal-950/30 ring-1 ring-white/60 space-y-4 max-w-lg mx-auto">
+             {manualVehicleMode ? (
+                    <div 
+                      className="space-y-5"
+                    >
+                      <VehicleFinder />
+
+                      <button
+                        type="button"
+                        onClick={() => setManualVehicleMode(false)}
+                        className="mx-auto block text-sm font-semibold text-slate-500 underline underline-offset-4 decoration-slate-500 transition-colors hover:text-teal-600 hover:decoration-teal-600"
+                      >
+                        Use reg to find vehicle
+                      </button>
+
+                      <p className="text-center text-slate-500 text-xs">
+                        By continuing, you agree to our Terms of Service
+                      </p>
+                    </div>
+                   ) : (
+
             <form
               onSubmit={handleMainFormSubmit}
-              className="w-full bg-white/95 backdrop-blur-md p-6 sm:p-8 rounded-2xl shadow-2xl shadow-teal-950/30 ring-1 ring-white/60 space-y-4 max-w-lg mx-auto"
+              className="w-full space-y-4 max-w-lg mx-auto"
+              // className="w-full bg-white/95 backdrop-blur-md p-6 sm:p-8 rounded-2xl shadow-2xl shadow-teal-950/30 ring-1 ring-white/60 space-y-4 max-w-lg mx-auto"
             >
               <div className="flex border-2 border-gray-200 rounded-xl overflow-hidden shadow-sm focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-500/20 transition-colors">
                 <div className="flex-1 relative">
@@ -386,6 +410,16 @@ export default function MonzicHomepage() {
                   />
                 </div>
               </div>
+              <button
+                  type="button"
+                  onClick={() => {
+                    setMessage("")
+                    setManualVehicleMode(true)
+                  }}
+                  className="block text-sm font-bold text-slate-500 underline underline-offset-4 decoration-slate-500 transition-colors hover:text-orange-400 hover:decoration-orange-400"
+                >
+                  Choose vehicle manually
+              </button>
               <Button
                 type="submit"
                 className="w-full bg-gradient-to-r from-teal-600 to-teal-700 hover:from-teal-700 hover:to-teal-800 text-white py-3 sm:py-4 rounded-xl font-semibold text-base sm:text-lg shadow-lg shadow-teal-600/25 transition-all hover:shadow-xl hover:shadow-teal-600/30"
@@ -393,6 +427,9 @@ export default function MonzicHomepage() {
                 {"LOOKUP"}
               </Button>
             </form>
+            
+             )}
+             </div>
 
             {/* Trust indicators */}
             <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-sm text-teal-50/90">

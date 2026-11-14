@@ -249,7 +249,7 @@ export function AuthDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className={`max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto max-w-md border-0 bg-transparent p-0 shadow-none [&>button]:right-5 [&>button]:top-5 [&>button]:rounded-lg [&>button]:bg-slate-900/70 [&>button]:text-slate-300 [&>button]:opacity-100 [&>button]:ring-0 [&>button]:hover:bg-slate-800 [&>button]:hover:text-yellow-400 ${isVerifying ? 'backdrop-blur-sm' : ''}`}>
+      <DialogContent className={`max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto max-w-md border-0 bg-white p-0 shadow-none [&>button]:right-5 [&>button]:top-5 [&>button]:rounded-lg [&>button]:bg-slate-900/70 [&>button]:text-slate-300 [&>button]:opacity-100 [&>button]:ring-0 [&>button]:hover:bg-slate-800 [&>button]:hover:text-yellow-400 ${isVerifying ? 'backdrop-blur-sm' : ''}`}>
         <div className="sm:rounded-lg overflow-hidden">
           <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-6 py-6 text-white text-center">
             <h2 className="text-2xl font-bold mb-2">{isLogin ? "Welcome Back" : `Join ${settings?.general?.siteName}`}</h2>

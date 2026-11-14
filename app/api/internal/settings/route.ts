@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSettings } from '@/lib/database';
 import { normalizeMaintenanceSettings } from '@/lib/maintenance';
 
-export const revalidate = 0;
-
+// Only used by middleware.ts for the site-wide redirect.
 export async function GET() {
   try {
     const generalSettings = await getSettings('general');
