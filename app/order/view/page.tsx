@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useNotifications } from "@/hooks/use-notifications"
 import { NotificationContainer } from "@/components/notification"
-import { Shield, AlertCircle, ArrowLeft } from "lucide-react"
+import { Shield, AlertCircle, ArrowLeft, Loader2 } from "lucide-react"
 
 export default function PolicyViewPage() {
   const searchParams = useSearchParams()
@@ -28,6 +28,10 @@ export default function PolicyViewPage() {
   const [isVerifying, setIsVerifying] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
+  const [postcodeRequired, setPostcodeRequired] = useState(true)
+  const [isCheckingPostcode, setIsCheckingPostcode] = useState(true)
+  const [quotePostcode, setQuotePostcode] = useState<string | null>(null)
+
   // Refs for auto-advance functionality
   const dayRef = useRef<HTMLInputElement>(null)
   const monthRef = useRef<HTMLInputElement>(null)
@@ -44,8 +48,36 @@ export default function PolicyViewPage() {
     }
   }, [policyNumber, router, isMounted])
 
-  if (!isMounted) {
-    return null
+  // Check if quote's postcode is valid
+  useEffect(() => {
+    if (policyNumber) {
+      checkPostcodeValidity()
+    }
+  }, [policyNumber])
+
+  const checkPostcodeValidity = async () => {
+    setIsCheckingPostcode(true)
+    try {
+      const response = await fetch(`/api/policy/postcode-validity?number=${policyNumber}`)
+      const data = await response.json()
+      
+      if (data.isValid) {
+        // Postcode is valid in the system, require user to enter it
+        setPostcodeRequired(true)
+      } else {
+        // Postcode is invalid/not found in record, make it optional
+        setPostcodeRequired(false)
+        if (data.postcode) {
+          setQuotePostcode(data.postcode)
+        }
+      }
+    } catch (error) {
+      console.error("Error checking postcode validity:", error)
+      // On error, default to required for security
+      setPostcodeRequired(true)
+    } finally {
+      setIsCheckingPostcode(false)
+    }
   }
 
   const handleInputChange = (field: string, value: string) => {
@@ -98,11 +130,18 @@ export default function PolicyViewPage() {
       newErrors.dateOfBirthYear = "Please enter a valid year"
     }
 
-    // Validate postcode
-    if (!formData.postcode.trim()) {
-      newErrors.postcode = "Postcode is required"
-    } else if (!/^[A-Z0-9]{1,4}\s?[A-Z0-9]{1,3}$/i.test(formData.postcode.trim())) {
-      newErrors.postcode = "Please enter a valid UK postcode"
+     // Validate postcode only if required
+    if (postcodeRequired) {
+      if (!formData.postcode.trim()) {
+        newErrors.postcode = "Postcode is required"
+      } else if (!/^[A-Z0-9]{1,4}\s?[A-Z0-9]{1,3}$/i.test(formData.postcode.trim())) {
+        newErrors.postcode = "Please enter a valid UK postcode"
+         }
+    } else if (formData.postcode.trim()) {
+      // If postcode is optional but user entered something, validate format
+      if (!/^[A-Z0-9]{1,4}\s?[A-Z0-9]{1,3}$/i.test(formData.postcode.trim())) {
+        newErrors.postcode = "Please enter a valid UK postcode"
+      }
     }
 
     setErrors(newErrors)
@@ -168,6 +207,21 @@ export default function PolicyViewPage() {
       setIsVerifying(false)
     }
   }
+
+
+  if (!isMounted) {
+    return (
+      <div className="min-h-screen bg-black">
+        <main className="flex items-center justify-center min-h-screen">
+          <p className="flex items-center gap-2 text-gray-400" role="status">
+            <Loader2 className="w-4 h-4 animate-spin text-teal-500" />
+            <span>Loading order details...</span>
+          </p>
+        </main>
+      </div>
+    )
+  }
+
 
   if (!policyNumber) {
     return (
@@ -309,13 +363,31 @@ export default function PolicyViewPage() {
                 <p className="text-xs text-gray-500 mt-2">Format: DD/MM/YYYY (e.g., 01/01/1980)</p>
               </div>
 
+              {/* Postcode Field - Conditionally Required */}
               <div>
                 <label
                   htmlFor="postcode"
-                  className="block text-sm font-semibold text-gray-700 mb-2 uppercase tracking-wide"
+                  className="text-sm font-semibold text-slate-300 mb-2 uppercase tracking-wide flex items-center gap-2"
                 >
-                  Postcode *
+                  Postcode {postcodeRequired ? <span className="text-teal-500">*</span> : <span className="text-slate-500 text-xs">(optional)</span>}
                 </label>
+                {/* Loading state while checking postcode validity */}
+                {isCheckingPostcode && (
+                  <div className="flex items-center gap-2 text-slate-400 text-sm mb-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-teal-500" />
+                    Checking postcode validity...
+                  </div>
+                )}
+
+                {/* Info message when postcode is optional
+                {!isCheckingPostcode && !postcodeRequired && quotePostcode && (
+                  <div className="mb-3 p-3 bg-slate-800/50 border border-slate-700 rounded-lg">
+                    <p className="text-xs text-slate-400">
+                      The postcode on record (<span className="text-yellow-400 font-mono">{quotePostcode}</span>) is not a valid UK postcode. 
+                      You can leave this field blank or enter your current postcode.
+                    </p>
+                  </div>
+                )} */}
                 <Input
                   id="postcode"
                   type="text"
@@ -323,8 +395,10 @@ export default function PolicyViewPage() {
                   onChange={(e) => handleInputChange("postcode", e.target.value.toUpperCase())}
                   className={`w-full h-12 text-base shadow-sm border-2 rounded-lg transition-all ${errors.postcode ? "border-red-500 focus:ring-red-500" : "border-gray-300 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"}`}
                   style={{ WebkitTapHighlightColor: 'transparent', outline: 'none', boxShadow: 'none', WebkitBoxShadow: 'none' }}
-                  required
+                  required={postcodeRequired}
                   autoComplete="postal-code"
+                  placeholder={postcodeRequired ? "Enter your postcode" : "Optional - enter if you wish"}
+                  disabled={isCheckingPostcode}
                 />
                 {errors.postcode && <p className="text-red-500 text-xs mt-2 font-medium">{errors.postcode}</p>}
               </div>
@@ -332,12 +406,17 @@ export default function PolicyViewPage() {
               <Button
                 type="submit"
                 className="w-full bg-gradient-to-r from-teal-600 to-teal-700 hover:from-teal-700 hover:to-teal-800 text-white py-3 h-auto text-base font-semibold rounded-xl shadow-md hover:shadow-lg transition-all"
-                disabled={isVerifying}
+                disabled={isVerifying || isCheckingPostcode}
               >
                 {isVerifying ? (
                   <>
                     <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
                     Verifying...
+                  </>
+                ) : isCheckingPostcode ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Please wait...
                   </>
                 ) : (
                   "Access Documents"

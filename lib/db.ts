@@ -5,3 +5,11 @@ import { pg } from '@/core/pg';
 // The shared pool (and its connection timeouts) lives in `core/pg` so this
 // client and the raw SQL client in `core/db-raw` cannot drift apart.
 export const db = drizzle(pg, { schema });
+
+/**
+ * Check if database is configured without throwing.
+ * Useful for conditional logic that needs to know if DB is available.
+ */
+export function isDatabaseConfigured(): boolean {
+    return !!process.env.DATABASE_URL
+}
